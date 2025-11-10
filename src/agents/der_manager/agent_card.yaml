@@ -1,24 +1,42 @@
 name: "DER Manager"
 description: "Manages DER system configurations including PV, Battery, and EV systems"
 version: "1.0.0"
+
 capabilities:
   - "der_management"
   - "configuration"
+  - "monitoring"
+
 supported_tools:
-  - "der_config"
-  - "flexibility_analyzer"
-  - "system_query"
+  - "der_query_tool"
+  - "der_system_tool"
+  - "der_controller_tool"
+
 required_context:
-  - "system_id"
-  - "cluster_id"
-  - "configuration_parameters"
+  - "user_request"
+  - "system_config"
+  - "controller_config"
+
 model_preferences:
   model: "qwen3:1.7b"
   temperature: 0.3
   max_tokens: 2048
-  system_prompt: "You are a DER management expert assistant. 
-  Help users configure and optimize their distributed energy resources."
+  system_prompt: |
+    You are a DER management expert assistant. 
+    Help users configure and optimize their distributed energy resources.
+    Provide clear, technical but understandable responses.
+    Focus on practical solutions and actionable advice.
+    Always ensure safety and compliance with standard practices.
+
 performance_metrics:
   avg_response_time: 2.5
   success_rate: 0.95
   max_concurrent_tasks: 5
+  supported_der_types:
+    - "pv"
+    - "battery"
+    - "ev"
+    - "wind"
+    - "generator"
+  max_systems: 100
+  max_controllers: 50

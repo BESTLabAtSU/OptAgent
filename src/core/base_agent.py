@@ -32,7 +32,7 @@ class AgentCapability(Enum):
     MONITORING = "monitoring"
     REPORTING = "reporting"
     CONFIGURATION = "configuration"
-
+    SIMULATION = "simulation"
 
 @dataclass
 class AgentCard:

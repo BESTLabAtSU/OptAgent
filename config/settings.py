@@ -19,7 +19,20 @@ class OllamaConfig(BaseSettings):
 
     host: str = Field(default="http://localhost:11434")
     model: str = Field(default="qwen3:1.7b")
-    temperature: float = Field(default=0.7)
+    temperature: float = Field(default=0.2)
+    max_tokens: int = Field(default=2048)
+    timeout: int = Field(default=30)
+
+# in config/settings.py
+
+class OpenAIConfig(BaseSettings):
+    model_config = SettingsConfigDict(env_prefix="OPENAI_")
+    api_key: Optional[str] = Field(
+        default="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",  # <-- put your key here
+        description="OpenAI API key"
+    )
+    model: str = Field(default="gpt-4o-mini")
+    temperature: float = Field(default=0.2)
     max_tokens: int = Field(default=2048)
     timeout: int = Field(default=30)
 
@@ -74,6 +87,9 @@ class Settings(BaseSettings):
 
     # Sub-configurations (each reads its own env vars via its env_prefix)
     ollama: OllamaConfig = Field(default_factory=OllamaConfig)
+    provider: str = Field(default="ollama")  # "ollama" or "openai"
+    openai: OpenAIConfig = Field(default_factory=OpenAIConfig)
+
     mcp: MCPConfig = Field(default_factory=MCPConfig)
     message_bus: MessageBusConfig = Field(default_factory=MessageBusConfig)
     der_system: DERSystemConfig = Field(default_factory=DERSystemConfig)

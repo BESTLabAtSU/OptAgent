@@ -68,7 +68,7 @@ class DERConfigTool(BaseTool):
             }
         )
 
-        self.config_dir = config_dir or Path("./der_configs")
+        self.config_dir = config_dir or Path(r"D:\Building_Simulator\BuildGPT_Agentic_AI_for_Autonomous_Building\bestopt\examples\SFH_1_Building")
         self.config_dir.mkdir(parents=True, exist_ok=True)
 
         # In-memory storage of current configurations
@@ -79,7 +79,7 @@ class DERConfigTool(BaseTool):
 
     def _load_existing_configs(self) -> None:
         """Load existing configurations from disk"""
-        config_file = self.config_dir / "current_config.json"
+        config_file = self.config_dir / "config_setup.json"
         if config_file.exists():
             with open(config_file, 'r') as f:
                 data = json.load(f)
@@ -88,7 +88,7 @@ class DERConfigTool(BaseTool):
 
     def _save_configs(self) -> None:
         """Save current configurations to disk"""
-        config_file = self.config_dir / "current_config.json"
+        config_file = self.config_dir / "revised_config.json"
         data = {
             system_id: asdict(config)
             for system_id, config in self.current_configs.items()

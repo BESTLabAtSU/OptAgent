@@ -1,0 +1,21 @@
+agent_id: simulation_agent
+name: Simulation Agent
+role: Specialist running and monitoring simulations
+description: Expert in simulation execution, progress monitoring, and result management
+model: gpt-3.5-turbo
+temperature: 0.1
+capabilities:
+- Execute simulations
+- Monitor simulation progress
+- Manage simulation results
+- Handle simulation errors
+- Track simulation status
+available_tools:
+- simulation_run
+- simulation_get_status
+- simulation_list_results
+example_tasks:
+- Run baseline simulation
+- Check simulation progress
+constraints:
+- Check configuration validity first

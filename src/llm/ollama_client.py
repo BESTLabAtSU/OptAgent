@@ -1,59 +1,114 @@
-# src/llm/ollama_client.py
 """
-Ollama client for local LLM integration
+Updated Ollama client with accurate token counting
 """
 import aiohttp
 import asyncio
 import json
 from typing import Dict, Any, Optional, List, AsyncGenerator
 from dataclasses import dataclass
-import time
+import logging
 
 from config.settings import get_settings
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
 class OllamaResponse:
-    """Response from Ollama API"""
+    """Response from Ollama API with token metrics"""
     text: str
     model: str
-    total_duration: Optional[float] = None
-    load_duration: Optional[float] = None
-    eval_duration: Optional[float] = None
-    eval_count: Optional[int] = None
+    # Token counts from Ollama API
+    prompt_eval_count: int = 0      # Input/prompt tokens
+    eval_count: int = 0             # Output/completion tokens
+    # Timing info (nanoseconds)
+    total_duration: Optional[int] = None
+    load_duration: Optional[int] = None
+    prompt_eval_duration: Optional[int] = None
+    eval_duration: Optional[int] = None
+    
+    @property
+    def total_tokens(self) -> int:
+        """Total tokens (prompt + completion)"""
+        return self.prompt_eval_count + self.eval_count
+    
+    @property
+    def tokens_per_second(self) -> Optional[float]:
+        """Calculate tokens/second for generation"""
+        if self.eval_duration and self.eval_count:
+            # eval_duration is in nanoseconds
+            seconds = self.eval_duration / 1e9
+            return self.eval_count / seconds if seconds > 0 else None
+        return None
 
 
 class OllamaClient:
     """
-    Client for interacting with Ollama API for local LLM inference
+    Ollama client with accurate token counting.
+    
+    Token counts come from two sources:
+    1. Ollama API response (most accurate, when available)
+    2. Fallback tokenizer estimation (when API doesn't return counts)
     """
 
     def __init__(
             self,
             host: Optional[str] = None,
             model: Optional[str] = None,
-            timeout: Optional[int] = None
+            timeout: Optional[int] = None,
+            use_tokenizer_fallback: bool = True
     ):
         settings = get_settings()
-        self.host = host or settings.ollama.host
-        self.default_model = model or settings.ollama.model
-        self.timeout = timeout or settings.ollama.timeout
+        self.host = host or getattr(settings, 'ollama', None) and settings.ollama.host or "http://localhost:11434"
+        self.default_model = model or getattr(settings, 'ollama', None) and settings.ollama.model or "llama3.2"
+        self.timeout = timeout or getattr(settings, 'ollama', None) and settings.ollama.timeout or 120
         self.session: Optional[aiohttp.ClientSession] = None
+        
+        # Token counter for fallback estimation
+        self._token_counter = None
+        self._use_tokenizer_fallback = use_tokenizer_fallback
+        if use_tokenizer_fallback:
+            self._init_token_counter()
+    
+    def _init_token_counter(self):
+        """Initialize token counter for fallback estimation"""
+        try:
+            from .token_counter import TokenCounterFactory
+            self._token_counter = TokenCounterFactory.get_counter("ollama", self.default_model)
+            logger.info(f"Initialized token counter for {self.default_model}")
+        except Exception as e:
+            logger.warning(f"Could not initialize token counter: {e}")
+            self._token_counter = None
 
     async def __aenter__(self):
-        """Async context manager entry"""
         self.session = aiohttp.ClientSession()
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
-        """Async context manager exit"""
         if self.session:
             await self.session.close()
 
     async def _ensure_session(self):
-        """Ensure aiohttp session exists"""
         if not self.session:
             self.session = aiohttp.ClientSession()
+
+    def _estimate_tokens(self, text: str) -> int:
+        """Estimate tokens using fallback counter"""
+        if self._token_counter and text:
+            return self._token_counter.count(text)
+        # Last resort: ~4 chars per token
+        return len(text) // 4 if text else 0
+
+    def _estimate_message_tokens(self, messages: List[Dict[str, str]]) -> int:
+        """Estimate tokens for messages"""
+        if self._token_counter:
+            return self._token_counter.count_messages(messages)
+        # Fallback estimation
+        total = 0
+        for msg in messages:
+            total += 4  # Overhead per message
+            total += self._estimate_tokens(msg.get("content", ""))
+        return total
 
     async def generate(
             self,
@@ -64,33 +119,27 @@ class OllamaClient:
             system: Optional[str] = None,
             context: Optional[List[int]] = None,
             stream: bool = False
-    ) -> str:
+    ) -> OllamaResponse:
         """
-        Generate text using Ollama
-
-        Args:
-            prompt: The prompt to send to the model
-            model: Model to use (defaults to configured model)
-            temperature: Temperature for generation (0-1)
-            max_tokens: Maximum tokens to generate
-            system: System prompt
-            context: Context from previous conversation
-            stream: Whether to stream the response
-
-        Returns:
-            Generated text response
+        Generate text using Ollama.
+        Returns OllamaResponse with token counts.
         """
         await self._ensure_session()
 
-        settings = get_settings()
         model = model or self.default_model
-        temperature = temperature if temperature is not None else settings.ollama.temperature
-        max_tokens = max_tokens or settings.ollama.max_tokens
+        
+        settings = get_settings()
+        temperature = temperature if temperature is not None else (
+            getattr(settings, 'ollama', None) and settings.ollama.temperature or 0.7
+        )
+        max_tokens = max_tokens or (
+            getattr(settings, 'ollama', None) and settings.ollama.max_tokens or 2048
+        )
 
-        # Prepare request payload
         payload = {
             "model": model,
             "prompt": prompt,
+            "stream": False,  # Need full response for token counts
             "options": {
                 "temperature": temperature,
                 "num_predict": max_tokens
@@ -99,19 +148,10 @@ class OllamaClient:
 
         if system:
             payload["system"] = system
-
         if context:
             payload["context"] = context
 
-        if stream:
-            return await self._generate_stream(payload)
-        else:
-            return await self._generate_complete(payload)
-
-    async def _generate_complete(self, payload: Dict[str, Any]) -> str:
-        """Generate complete response (non-streaming)"""
         url = f"{self.host}/api/generate"
-        payload["stream"] = False
 
         try:
             async with self.session.post(
@@ -121,38 +161,36 @@ class OllamaClient:
             ) as response:
                 if response.status == 200:
                     data = await response.json()
-                    return data.get("response", "")
+                    
+                    # Extract token counts from response
+                    prompt_tokens = data.get("prompt_eval_count", 0)
+                    completion_tokens = data.get("eval_count", 0)
+                    
+                    # Fallback estimation if API didn't return counts
+                    if prompt_tokens == 0 and self._use_tokenizer_fallback:
+                        prompt_tokens = self._estimate_tokens(prompt)
+                        if system:
+                            prompt_tokens += self._estimate_tokens(system)
+                    
+                    if completion_tokens == 0 and self._use_tokenizer_fallback:
+                        completion_tokens = self._estimate_tokens(data.get("response", ""))
+                    
+                    return OllamaResponse(
+                        text=data.get("response", ""),
+                        model=data.get("model", model),
+                        prompt_eval_count=prompt_tokens,
+                        eval_count=completion_tokens,
+                        total_duration=data.get("total_duration"),
+                        load_duration=data.get("load_duration"),
+                        prompt_eval_duration=data.get("prompt_eval_duration"),
+                        eval_duration=data.get("eval_duration")
+                    )
                 else:
                     error_text = await response.text()
                     raise Exception(f"Ollama API error: {response.status} - {error_text}")
 
         except asyncio.TimeoutError:
             raise Exception(f"Ollama request timeout after {self.timeout} seconds")
-        except Exception as e:
-            raise Exception(f"Ollama request failed: {str(e)}")
-
-    async def _generate_stream(self, payload: Dict[str, Any]) -> AsyncGenerator[str, None]:
-        """Generate streaming response"""
-        url = f"{self.host}/api/generate"
-        payload["stream"] = True
-
-        try:
-            async with self.session.post(url, json=payload) as response:
-                if response.status == 200:
-                    async for line in response.content:
-                        if line:
-                            try:
-                                data = json.loads(line)
-                                if "response" in data:
-                                    yield data["response"]
-                            except json.JSONDecodeError:
-                                continue
-                else:
-                    error_text = await response.text()
-                    raise Exception(f"Ollama API error: {response.status} - {error_text}")
-
-        except Exception as e:
-            raise Exception(f"Ollama streaming failed: {str(e)}")
 
     async def chat(
             self,
@@ -160,34 +198,31 @@ class OllamaClient:
             model: Optional[str] = None,
             temperature: Optional[float] = None,
             max_tokens: Optional[int] = None
-    ) -> str:
+    ) -> OllamaResponse:
         """
-        Chat completion using Ollama
-
-        Args:
-            messages: List of message dicts with 'role' and 'content'
-            model: Model to use
-            temperature: Temperature for generation
-            max_tokens: Maximum tokens to generate
-
-        Returns:
-            Assistant's response
+        Chat completion using Ollama.
+        Returns OllamaResponse with token counts.
         """
         await self._ensure_session()
 
-        settings = get_settings()
         model = model or self.default_model
-        temperature = temperature if temperature is not None else settings.ollama.temperature
-        max_tokens = max_tokens or settings.ollama.max_tokens
+        
+        settings = get_settings()
+        temperature = temperature if temperature is not None else (
+            getattr(settings, 'ollama', None) and settings.ollama.temperature or 0.7
+        )
+        max_tokens = max_tokens or (
+            getattr(settings, 'ollama', None) and settings.ollama.max_tokens or 2048
+        )
 
         payload = {
             "model": model,
             "messages": messages,
+            "stream": False,
             "options": {
                 "temperature": temperature,
                 "num_predict": max_tokens
-            },
-            "stream": False
+            }
         }
 
         url = f"{self.host}/api/chat"
@@ -200,123 +235,39 @@ class OllamaClient:
             ) as response:
                 if response.status == 200:
                     data = await response.json()
-                    return data.get("message", {}).get("content", "")
+                    
+                    # Extract token counts
+                    prompt_tokens = data.get("prompt_eval_count", 0)
+                    completion_tokens = data.get("eval_count", 0)
+                    
+                    # Fallback estimation
+                    if prompt_tokens == 0 and self._use_tokenizer_fallback:
+                        prompt_tokens = self._estimate_message_tokens(messages)
+                    
+                    response_text = data.get("message", {}).get("content", "")
+                    if completion_tokens == 0 and self._use_tokenizer_fallback:
+                        completion_tokens = self._estimate_tokens(response_text)
+                    
+                    return OllamaResponse(
+                        text=response_text,
+                        model=data.get("model", model),
+                        prompt_eval_count=prompt_tokens,
+                        eval_count=completion_tokens,
+                        total_duration=data.get("total_duration"),
+                        load_duration=data.get("load_duration"),
+                        prompt_eval_duration=data.get("prompt_eval_duration"),
+                        eval_duration=data.get("eval_duration")
+                    )
                 else:
                     error_text = await response.text()
                     raise Exception(f"Ollama chat error: {response.status} - {error_text}")
 
-        except Exception as e:
-            raise Exception(f"Ollama chat failed: {str(e)}")
-
-    async def embeddings(
-            self,
-            text: str,
-            model: Optional[str] = None
-    ) -> List[float]:
-        """
-        Generate embeddings for text
-
-        Args:
-            text: Text to embed
-            model: Model to use for embeddings
-
-        Returns:
-            Embedding vector
-        """
-        await self._ensure_session()
-
-        model = model or self.default_model
-
-        payload = {
-            "model": model,
-            "prompt": text
-        }
-
-        url = f"{self.host}/api/embeddings"
-
-        try:
-            async with self.session.post(
-                    url,
-                    json=payload,
-                    timeout=aiohttp.ClientTimeout(total=self.timeout)
-            ) as response:
-                if response.status == 200:
-                    data = await response.json()
-                    return data.get("embedding", [])
-                else:
-                    error_text = await response.text()
-                    raise Exception(f"Ollama embeddings error: {response.status} - {error_text}")
-
-        except Exception as e:
-            raise Exception(f"Ollama embeddings failed: {str(e)}")
-
-    async def list_models(self) -> List[Dict[str, Any]]:
-        """
-        List available models in Ollama
-
-        Returns:
-            List of available models
-        """
-        await self._ensure_session()
-
-        url = f"{self.host}/api/tags"
-
-        try:
-            async with self.session.get(url) as response:
-                if response.status == 200:
-                    data = await response.json()
-                    return data.get("models", [])
-                else:
-                    error_text = await response.text()
-                    raise Exception(f"Ollama list models error: {response.status} - {error_text}")
-
-        except Exception as e:
-            raise Exception(f"Failed to list Ollama models: {str(e)}")
-
-    async def pull_model(self, model_name: str) -> bool:
-        """
-        Pull a model from Ollama library
-
-        Args:
-            model_name: Name of the model to pull
-
-        Returns:
-            True if successful
-        """
-        await self._ensure_session()
-
-        url = f"{self.host}/api/pull"
-        payload = {"name": model_name}
-
-        try:
-            async with self.session.post(url, json=payload) as response:
-                if response.status == 200:
-                    # Stream the pull progress
-                    async for line in response.content:
-                        if line:
-                            try:
-                                data = json.loads(line)
-                                status = data.get("status", "")
-                                print(f"Pull status: {status}")
-                            except:
-                                continue
-                    return True
-                else:
-                    return False
-
-        except Exception as e:
-            print(f"Failed to pull model: {str(e)}")
-            return False
+        except asyncio.TimeoutError:
+            raise Exception(f"Ollama request timeout after {self.timeout} seconds")
 
     async def health_check(self) -> bool:
-        """
-        Check if Ollama service is healthy
-
-        Returns:
-            True if service is healthy
-        """
+        """Check if Ollama service is healthy"""
         await self._ensure_session()
-
         try:
             async with self.session.get(
                     self.host,

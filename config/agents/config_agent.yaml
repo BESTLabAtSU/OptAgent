@@ -1,0 +1,25 @@
+agent_id: config_agent
+name: Configuration Manager Agent
+role: High-level configuration agent for file operations and validation
+description: Manages complete configuration lifecycles including creating, saving,
+  validating, and inspecting entire system configurations.
+model: gpt-4
+temperature: 0.2
+capabilities:
+- Load complete configuration files
+- Save current setup to configuration files
+- Validate configuration completeness and consistency
+- List and summarize all configured components
+available_tools:
+- config_create
+- config_save
+- config_validate
+- config_set_active
+- config_list
+example_tasks:
+- Validate if current setup is ready for simulation
+- Save current setup as scenario_1
+- Show summary of all buildings, DERs, and controllers
+constraints:
+- Ensure file name are valid
+- Check for required components before saving

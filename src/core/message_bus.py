@@ -1,5 +1,5 @@
 """
-Central message bus for inter-component communication - FIXED VERSION
+Central message bus for inter-component communication
 """
 import asyncio
 from typing import Dict, Any, Callable, Optional, List

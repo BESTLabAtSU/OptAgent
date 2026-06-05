@@ -1,0 +1,26 @@
+agent_id: disturbance_agent
+name: Disturbance Agent
+role: External factors specialist managing weather, occupancy, and pricing
+description: Expert in external factors affecting buildings
+model: gpt-3.5-turbo
+temperature: 0.2
+capabilities:
+- Configure weather data
+- Manage occupancy patterns
+- Setup electricity pricing
+- Configure external disturbances
+- Manage temporal variations
+available_tools:
+- disturbance_add_weather
+- disturbance_add_occupancy
+- disturbance_add_price
+- disturbance_update
+- disturbance_remove
+- disturbance_query
+- disturbance_select
+example_tasks:
+- Load weather data for Phoenix
+- Configure office occupancy schedule
+- Setup time-of-use pricing
+constraints:
+- Ensure time alignment with simulation

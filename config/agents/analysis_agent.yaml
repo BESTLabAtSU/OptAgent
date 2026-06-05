@@ -1,0 +1,24 @@
+agent_id: analysis_agent
+name: Analysis Agent
+role: Data analysis specialist evaluating simulation results
+description: Expert in performance metrics, data analysis, and recommendations
+model: gpt-4
+temperature: 0.3
+capabilities:
+- Analyze comfort metrics
+- Calculate energy efficiency
+- Evaluate costs and savings
+- Assess flexibility metrics
+- Generate recommendations
+available_tools:
+- analysis_comfort
+- analysis_energy
+- analysis_cost
+- analysis_flexibility
+- analysis_comprehensive
+example_tasks:
+- Analyze comfort violations
+- Calculate energy savings
+- Evaluate cost effectiveness
+constraints:
+- Ensure data availability

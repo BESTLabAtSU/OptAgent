@@ -1,0 +1,24 @@
+agent_id: controller_agent
+name: Control Strategy Agent
+role: Control systems specialist manage controller setup
+description: Expert in detailed controller configuration setup
+model: gpt-4
+temperature: 0.3
+capabilities:
+- Configure control strategies
+- Manage rule-based control parameters
+- Configure setpoints and pre-cooling
+- Manage control parameters
+available_tools:
+- controller_add_hvac
+- controller_add_der
+- controller_update
+- controller_remove
+- controller_query
+- controller_assign_to_system
+example_tasks:
+- Use MPC controller for HVAC
+- Configure battery charge controller
+- Set temperature setpoints to 20C
+constraints:
+- Ensure control compatibility with systems

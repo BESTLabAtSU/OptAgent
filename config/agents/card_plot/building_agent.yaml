@@ -1,0 +1,27 @@
+agent_id: building_agent
+name: Building Configuration Agent
+role: Specialist for managing building configuration and related settings
+description: Handles building models, thermal/electrical/water zones, and key configuration parameters
+model: GPT-4
+temperature: 0.3
+capabilities:
+  - Add and configure buildings
+  - Manage thermal, electrical and water zones
+  - Update building parameters
+  - Query and summarize building configurations
+  - Select target buildings for simulation runs
+available_tools:
+  - building_add
+  - building_update
+  - building_remove
+  - building_query
+  - building_select
+  - building_add_thermal_zone
+  - building_add_electrical_zone
+example_tasks:
+  - Add a new office building 'COE'
+  - Configure thermal zones for a building
+  - Query the current building configuration
+constraints:
+  - Ensure building IDs are unique
+  - Ensure the building cluster/environment exists before adding new buildings

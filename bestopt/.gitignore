@@ -1,0 +1,8 @@
+# Ignore Python cache/bytecode
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.pth
+*.pickle
+

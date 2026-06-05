@@ -1,0 +1,1062 @@
+{
+  "clusters": {
+    "residential_cluster_multi": {
+      "parameters": {
+        "location": "Syracuse, NY"
+      },
+      "buildings": [
+        "SFH_1",
+        "SFH_2",
+        "SFH_3",
+        "SFH_4",
+        "SFH_5"
+      ],
+      "systems": [
+        "hvac_system_SFH_1",
+        "der_system_SFH_1",
+        "hvac_system_SFH_2",
+        "der_system_SFH_2",
+        "hvac_system_SFH_3",
+        "der_system_SFH_3",
+        "hvac_system_SFH_4",
+        "der_system_SFH_4",
+        "hvac_system_SFH_5",
+        "der_system_SFH_5"
+      ]
+    }
+  },
+  "buildings": {
+    "SFH_1": {
+      "cluster_id": "residential_cluster_multi",
+      "parameters": {
+        "building_type": "single_family_home",
+        "building_number": 1
+      },
+      "thermal_zones": [
+        "zone0"
+      ],
+      "electrical_zones": [
+        "zone0"
+      ]
+    },
+    "SFH_2": {
+      "cluster_id": "residential_cluster_multi",
+      "parameters": {
+        "building_type": "single_family_home",
+        "building_number": 2
+      },
+      "thermal_zones": [
+        "zone0"
+      ],
+      "electrical_zones": [
+        "zone0"
+      ]
+    },
+    "SFH_3": {
+      "cluster_id": "residential_cluster_multi",
+      "parameters": {
+        "building_type": "single_family_home",
+        "building_number": 3
+      },
+      "thermal_zones": [
+        "zone0"
+      ],
+      "electrical_zones": [
+        "zone0"
+      ]
+    },
+    "SFH_4": {
+      "cluster_id": "residential_cluster_multi",
+      "parameters": {
+        "building_type": "single_family_home",
+        "building_number": 4
+      },
+      "thermal_zones": [
+        "zone0"
+      ],
+      "electrical_zones": [
+        "zone0"
+      ]
+    },
+    "SFH_5": {
+      "cluster_id": "residential_cluster_multi",
+      "parameters": {
+        "building_type": "single_family_home",
+        "building_number": 5
+      },
+      "thermal_zones": [
+        "zone0"
+      ],
+      "electrical_zones": [
+        "zone0"
+      ]
+    }
+  },
+  "systems": {
+    "hvac_system_SFH_1": {
+      "cluster_id": "residential_cluster_multi",
+      "system_type": "hvac_systems",
+      "parameters": {
+        "system_name": "FCU System for SFH_1",
+        "system_config": {
+          "fan": {
+            "rated_flow_m3s": 1,
+            "rated_power_W": 1000
+          },
+          "fan_ctrl": {
+            "ctrl_type": "linear"
+          },
+          "coil": {
+            "epsilon": 0.8
+          },
+          "pump": {
+            "rated_flow_m3s": 0.005,
+            "rated_power_W": 500
+          },
+          "chiller": {
+            "rated_capacity_W": 3963.92,
+            "rated_cop": 4.43
+          },
+          "tower": {
+            "rated_capacity_W": 3963.92,
+            "rated_fan_power_W": 2000,
+            "pump_power_per_flow": 1800,
+            "min_approach_C": 3.0,
+            "max_approach_C": 7.0
+          }
+        }
+      },
+      "components": {},
+      "class_path": "bestopt.env.modules.hvac.system.FCU.FCUModule",
+      "supported_buildings": [
+        "SFH_1"
+      ],
+      "controller_id": "hvac_controller_SFH_1"
+    },
+    "der_system_SFH_1": {
+      "cluster_id": "residential_cluster_multi",
+      "system_type": "der_systems",
+      "parameters": {
+        "system_name": "PV-Battery-EV System for SFH_1",
+        "system_config": {
+          "pv": {
+            "rated_capacity_kW": 13.0
+          },
+          "bat": {
+            "rated_capacity_kWh": 8.13,
+            "initial_soc": 0.13,
+            "charge_speed": 0.25,
+            "discharge_speed": 0.5,
+            "charge_efficiency": 0.95
+          },
+          "evs": [
+            {
+              "id": "ev_tesla_SFH_1",
+              "rated_capacity_kWh": 58.24,
+              "initial_soc": 0.2,
+              "charge_speed": 0.25,
+              "discharge_speed": 0.5,
+              "charge_efficiency": 0.95,
+              "initially_connected": true
+            },
+            {
+              "id": "ev_nissan_SFH_1",
+              "rated_capacity_kWh": 30.96,
+              "initial_soc": 0.8,
+              "charge_speed": 0.25,
+              "discharge_speed": 0.5,
+              "charge_efficiency": 0.95,
+              "initially_connected": false
+            }
+          ]
+        }
+      },
+      "components": {},
+      "class_path": "bestopt.env.modules.ders.system.der.DERModule",
+      "supported_buildings": [
+        "SFH_1"
+      ],
+      "controller_id": "der_controller_SFH_1"
+    },
+    "hvac_system_SFH_2": {
+      "cluster_id": "residential_cluster_multi",
+      "system_type": "hvac_systems",
+      "parameters": {
+        "system_name": "FCU System for SFH_2",
+        "system_config": {
+          "fan": {
+            "rated_flow_m3s": 1,
+            "rated_power_W": 1000
+          },
+          "fan_ctrl": {
+            "ctrl_type": "linear"
+          },
+          "coil": {
+            "epsilon": 0.8
+          },
+          "pump": {
+            "rated_flow_m3s": 0.005,
+            "rated_power_W": 500
+          },
+          "chiller": {
+            "rated_capacity_W": 4220.02,
+            "rated_cop": 4.27
+          },
+          "tower": {
+            "rated_capacity_W": 4220.02,
+            "rated_fan_power_W": 2000,
+            "pump_power_per_flow": 1800,
+            "min_approach_C": 3.0,
+            "max_approach_C": 7.0
+          }
+        }
+      },
+      "components": {},
+      "class_path": "bestopt.env.modules.hvac.system.FCU.FCUModule",
+      "supported_buildings": [
+        "SFH_2"
+      ],
+      "controller_id": "hvac_controller_SFH_2"
+    },
+    "der_system_SFH_2": {
+      "cluster_id": "residential_cluster_multi",
+      "system_type": "der_systems",
+      "parameters": {
+        "system_name": "PV-Battery-EV System for SFH_2",
+        "system_config": {
+          "pv": {
+            "rated_capacity_kW": 5.11
+          },
+          "bat": {
+            "rated_capacity_kWh": 7.76,
+            "initial_soc": 0.17,
+            "charge_speed": 0.25,
+            "discharge_speed": 0.5,
+            "charge_efficiency": 0.95
+          },
+          "evs": [
+            {
+              "id": "ev_tesla_SFH_2",
+              "rated_capacity_kWh": 40.65,
+              "initial_soc": 0.2,
+              "charge_speed": 0.25,
+              "discharge_speed": 0.5,
+              "charge_efficiency": 0.95,
+              "initially_connected": true
+            },
+            {
+              "id": "ev_nissan_SFH_2",
+              "rated_capacity_kWh": 35.56,
+              "initial_soc": 0.8,
+              "charge_speed": 0.25,
+              "discharge_speed": 0.5,
+              "charge_efficiency": 0.95,
+              "initially_connected": false
+            }
+          ]
+        }
+      },
+      "components": {},
+      "class_path": "bestopt.env.modules.ders.system.der.DERModule",
+      "supported_buildings": [
+        "SFH_2"
+      ],
+      "controller_id": "der_controller_SFH_2"
+    },
+    "hvac_system_SFH_3": {
+      "cluster_id": "residential_cluster_multi",
+      "system_type": "hvac_systems",
+      "parameters": {
+        "system_name": "FCU System for SFH_3",
+        "system_config": {
+          "fan": {
+            "rated_flow_m3s": 1,
+            "rated_power_W": 1000
+          },
+          "fan_ctrl": {
+            "ctrl_type": "linear"
+          },
+          "coil": {
+            "epsilon": 0.8
+          },
+          "pump": {
+            "rated_flow_m3s": 0.005,
+            "rated_power_W": 500
+          },
+          "chiller": {
+            "rated_capacity_W": 4146.32,
+            "rated_cop": 4.42
+          },
+          "tower": {
+            "rated_capacity_W": 4146.32,
+            "rated_fan_power_W": 2000,
+            "pump_power_per_flow": 1800,
+            "min_approach_C": 3.0,
+            "max_approach_C": 7.0
+          }
+        }
+      },
+      "components": {},
+      "class_path": "bestopt.env.modules.hvac.system.FCU.FCUModule",
+      "supported_buildings": [
+        "SFH_3"
+      ],
+      "controller_id": "hvac_controller_SFH_3"
+    },
+    "der_system_SFH_3": {
+      "cluster_id": "residential_cluster_multi",
+      "system_type": "der_systems",
+      "parameters": {
+        "system_name": "PV-Battery-EV System for SFH_3",
+        "system_config": {
+          "pv": {
+            "rated_capacity_kW": 10.8
+          },
+          "bat": {
+            "rated_capacity_kWh": 6.65,
+            "initial_soc": 0.27,
+            "charge_speed": 0.25,
+            "discharge_speed": 0.5,
+            "charge_efficiency": 0.95
+          },
+          "evs": [
+            {
+              "id": "ev_tesla_SFH_3",
+              "rated_capacity_kWh": 54.73,
+              "initial_soc": 0.2,
+              "charge_speed": 0.25,
+              "discharge_speed": 0.5,
+              "charge_efficiency": 0.95,
+              "initially_connected": true
+            },
+            {
+              "id": "ev_nissan_SFH_3",
+              "rated_capacity_kWh": 32.77,
+              "initial_soc": 0.8,
+              "charge_speed": 0.25,
+              "discharge_speed": 0.5,
+              "charge_efficiency": 0.95,
+              "initially_connected": false
+            }
+          ]
+        }
+      },
+      "components": {},
+      "class_path": "bestopt.env.modules.ders.system.der.DERModule",
+      "supported_buildings": [
+        "SFH_3"
+      ],
+      "controller_id": "der_controller_SFH_3"
+    },
+    "hvac_system_SFH_4": {
+      "cluster_id": "residential_cluster_multi",
+      "system_type": "hvac_systems",
+      "parameters": {
+        "system_name": "FCU System for SFH_4",
+        "system_config": {
+          "fan": {
+            "rated_flow_m3s": 1,
+            "rated_power_W": 1000
+          },
+          "fan_ctrl": {
+            "ctrl_type": "linear"
+          },
+          "coil": {
+            "epsilon": 0.8
+          },
+          "pump": {
+            "rated_flow_m3s": 0.005,
+            "rated_power_W": 500
+          },
+          "chiller": {
+            "rated_capacity_W": 4059.06,
+            "rated_cop": 4.46
+          },
+          "tower": {
+            "rated_capacity_W": 4059.06,
+            "rated_fan_power_W": 2000,
+            "pump_power_per_flow": 1800,
+            "min_approach_C": 3.0,
+            "max_approach_C": 7.0
+          }
+        }
+      },
+      "components": {},
+      "class_path": "bestopt.env.modules.hvac.system.FCU.FCUModule",
+      "supported_buildings": [
+        "SFH_4"
+      ],
+      "controller_id": "hvac_controller_SFH_4"
+    },
+    "der_system_SFH_4": {
+      "cluster_id": "residential_cluster_multi",
+      "system_type": "der_systems",
+      "parameters": {
+        "system_name": "PV-Battery-EV System for SFH_4",
+        "system_config": {
+          "pv": {
+            "rated_capacity_kW": 14.36
+          },
+          "bat": {
+            "rated_capacity_kWh": 9.4,
+            "initial_soc": 0.32,
+            "charge_speed": 0.25,
+            "discharge_speed": 0.5,
+            "charge_efficiency": 0.95
+          },
+          "evs": [
+            {
+              "id": "ev_tesla_SFH_4",
+              "rated_capacity_kWh": 77.72,
+              "initial_soc": 0.2,
+              "charge_speed": 0.25,
+              "discharge_speed": 0.5,
+              "charge_efficiency": 0.95,
+              "initially_connected": true
+            },
+            {
+              "id": "ev_nissan_SFH_4",
+              "rated_capacity_kWh": 35.7,
+              "initial_soc": 0.8,
+              "charge_speed": 0.25,
+              "discharge_speed": 0.5,
+              "charge_efficiency": 0.95,
+              "initially_connected": false
+            }
+          ]
+        }
+      },
+      "components": {},
+      "class_path": "bestopt.env.modules.ders.system.der.DERModule",
+      "supported_buildings": [
+        "SFH_4"
+      ],
+      "controller_id": "der_controller_SFH_4"
+    },
+    "hvac_system_SFH_5": {
+      "cluster_id": "residential_cluster_multi",
+      "system_type": "hvac_systems",
+      "parameters": {
+        "system_name": "FCU System for SFH_5",
+        "system_config": {
+          "fan": {
+            "rated_flow_m3s": 1,
+            "rated_power_W": 1000
+          },
+          "fan_ctrl": {
+            "ctrl_type": "linear"
+          },
+          "coil": {
+            "epsilon": 0.8
+          },
+          "pump": {
+            "rated_flow_m3s": 0.005,
+            "rated_power_W": 500
+          },
+          "chiller": {
+            "rated_capacity_W": 4011.92,
+            "rated_cop": 4.38
+          },
+          "tower": {
+            "rated_capacity_W": 4011.92,
+            "rated_fan_power_W": 2000,
+            "pump_power_per_flow": 1800,
+            "min_approach_C": 3.0,
+            "max_approach_C": 7.0
+          }
+        }
+      },
+      "components": {},
+      "class_path": "bestopt.env.modules.hvac.system.FCU.FCUModule",
+      "supported_buildings": [
+        "SFH_5"
+      ],
+      "controller_id": "hvac_controller_SFH_5"
+    },
+    "der_system_SFH_5": {
+      "cluster_id": "residential_cluster_multi",
+      "system_type": "der_systems",
+      "parameters": {
+        "system_name": "PV-Battery-EV System for SFH_5",
+        "system_config": {
+          "pv": {
+            "rated_capacity_kW": 13.01
+          },
+          "bat": {
+            "rated_capacity_kWh": 7.36,
+            "initial_soc": 0.33,
+            "charge_speed": 0.25,
+            "discharge_speed": 0.5,
+            "charge_efficiency": 0.95
+          },
+          "evs": [
+            {
+              "id": "ev_tesla_SFH_5",
+              "rated_capacity_kWh": 71.66,
+              "initial_soc": 0.2,
+              "charge_speed": 0.25,
+              "discharge_speed": 0.5,
+              "charge_efficiency": 0.95,
+              "initially_connected": true
+            },
+            {
+              "id": "ev_nissan_SFH_5",
+              "rated_capacity_kWh": 30.36,
+              "initial_soc": 0.8,
+              "charge_speed": 0.25,
+              "discharge_speed": 0.5,
+              "charge_efficiency": 0.95,
+              "initially_connected": false
+            }
+          ]
+        }
+      },
+      "components": {},
+      "class_path": "bestopt.env.modules.ders.system.der.DERModule",
+      "supported_buildings": [
+        "SFH_5"
+      ],
+      "controller_id": "der_controller_SFH_5"
+    }
+  },
+  "controllers": {
+    "hvac_controller_SFH_1": {
+      "system_id": "hvac_system_SFH_1",
+      "domain": "thermal",
+      "parameters": {
+        "domain": "thermal",
+        "type": "rule-based",
+        "mode": "cooling",
+        "precooling": {
+          "degree": 0,
+          "hours": 0
+        },
+        "base_cooling": 22.58,
+        "base_heating": 17.82,
+        "deadband": 0.5,
+        "cooling_power_max": 4541.57,
+        "heating_power_max": 4411.03
+      },
+      "class_path": "bestopt.env.controllers.thermal.SupervisoryController"
+    },
+    "der_controller_SFH_1": {
+      "system_id": "der_system_SFH_1",
+      "domain": "electrical",
+      "parameters": {
+        "domain": "electrical",
+        "type": "rule-based",
+        "mode": "self_consumption",
+        "bat_soc_min": 0.1,
+        "bat_soc_max": 0.9,
+        "ev_soc_min": 0.2,
+        "ev_soc_target": 0.8,
+        "ev_v2g_enabled": true,
+        "max_grid_import": 10000,
+        "max_grid_export": 5000,
+        "system_config": {
+          "pv": {
+            "rated_capacity_kW": 13.0
+          },
+          "bat": {
+            "rated_capacity_kWh": 8.13,
+            "initial_soc": 0.13
+          },
+          "ev": {
+            "rated_capacity_kWh": 5,
+            "initial_soc": 0.3
+          }
+        }
+      },
+      "class_path": "bestopt.env.controllers.electrical.SupervisoryController"
+    },
+    "hvac_controller_SFH_2": {
+      "system_id": "hvac_system_SFH_2",
+      "domain": "thermal",
+      "parameters": {
+        "domain": "thermal",
+        "type": "rule-based",
+        "mode": "cooling",
+        "precooling": {
+          "degree": 0,
+          "hours": 0
+        },
+        "base_cooling": 22.18,
+        "base_heating": 16.81,
+        "deadband": 0.5,
+        "cooling_power_max": 4418.25,
+        "heating_power_max": 3285.7
+      },
+      "class_path": "bestopt.env.controllers.thermal.SupervisoryController"
+    },
+    "der_controller_SFH_2": {
+      "system_id": "der_system_SFH_2",
+      "domain": "electrical",
+      "parameters": {
+        "domain": "electrical",
+        "type": "rule-based",
+        "mode": "self_consumption",
+        "bat_soc_min": 0.1,
+        "bat_soc_max": 0.9,
+        "ev_soc_min": 0.2,
+        "ev_soc_target": 0.8,
+        "ev_v2g_enabled": true,
+        "max_grid_import": 10000,
+        "max_grid_export": 5000,
+        "system_config": {
+          "pv": {
+            "rated_capacity_kW": 5.11
+          },
+          "bat": {
+            "rated_capacity_kWh": 7.76,
+            "initial_soc": 0.17
+          },
+          "ev": {
+            "rated_capacity_kWh": 5,
+            "initial_soc": 0.3
+          }
+        }
+      },
+      "class_path": "bestopt.env.controllers.electrical.SupervisoryController"
+    },
+    "hvac_controller_SFH_3": {
+      "system_id": "hvac_system_SFH_3",
+      "domain": "thermal",
+      "parameters": {
+        "domain": "thermal",
+        "type": "rule-based",
+        "mode": "cooling",
+        "precooling": {
+          "degree": 0,
+          "hours": 0
+        },
+        "base_cooling": 24.39,
+        "base_heating": 17.38,
+        "deadband": 0.5,
+        "cooling_power_max": 3002.99,
+        "heating_power_max": 3692.88
+      },
+      "class_path": "bestopt.env.controllers.thermal.SupervisoryController"
+    },
+    "der_controller_SFH_3": {
+      "system_id": "der_system_SFH_3",
+      "domain": "electrical",
+      "parameters": {
+        "domain": "electrical",
+        "type": "rule-based",
+        "mode": "self_consumption",
+        "bat_soc_min": 0.1,
+        "bat_soc_max": 0.9,
+        "ev_soc_min": 0.2,
+        "ev_soc_target": 0.8,
+        "ev_v2g_enabled": true,
+        "max_grid_import": 10000,
+        "max_grid_export": 5000,
+        "system_config": {
+          "pv": {
+            "rated_capacity_kW": 10.8
+          },
+          "bat": {
+            "rated_capacity_kWh": 6.65,
+            "initial_soc": 0.27
+          },
+          "ev": {
+            "rated_capacity_kWh": 5,
+            "initial_soc": 0.3
+          }
+        }
+      },
+      "class_path": "bestopt.env.controllers.electrical.SupervisoryController"
+    },
+    "hvac_controller_SFH_4": {
+      "system_id": "hvac_system_SFH_4",
+      "domain": "thermal",
+      "parameters": {
+        "domain": "thermal",
+        "type": "rule-based",
+        "mode": "cooling",
+        "precooling": {
+          "degree": 0,
+          "hours": 0
+        },
+        "base_cooling": 23.23,
+        "base_heating": 17.02,
+        "deadband": 0.5,
+        "cooling_power_max": 4625.81,
+        "heating_power_max": 4131.88
+      },
+      "class_path": "bestopt.env.controllers.thermal.SupervisoryController"
+    },
+    "der_controller_SFH_4": {
+      "system_id": "der_system_SFH_4",
+      "domain": "electrical",
+      "parameters": {
+        "domain": "electrical",
+        "type": "rule-based",
+        "mode": "self_consumption",
+        "bat_soc_min": 0.1,
+        "bat_soc_max": 0.9,
+        "ev_soc_min": 0.2,
+        "ev_soc_target": 0.8,
+        "ev_v2g_enabled": true,
+        "max_grid_import": 10000,
+        "max_grid_export": 5000,
+        "system_config": {
+          "pv": {
+            "rated_capacity_kW": 14.36
+          },
+          "bat": {
+            "rated_capacity_kWh": 9.4,
+            "initial_soc": 0.32
+          },
+          "ev": {
+            "rated_capacity_kWh": 5,
+            "initial_soc": 0.3
+          }
+        }
+      },
+      "class_path": "bestopt.env.controllers.electrical.SupervisoryController"
+    },
+    "hvac_controller_SFH_5": {
+      "system_id": "hvac_system_SFH_5",
+      "domain": "thermal",
+      "parameters": {
+        "domain": "thermal",
+        "type": "rule-based",
+        "mode": "cooling",
+        "precooling": {
+          "degree": 0,
+          "hours": 0
+        },
+        "base_cooling": 25.19,
+        "base_heating": 19.8,
+        "deadband": 0.5,
+        "cooling_power_max": 4156.6,
+        "heating_power_max": 3511.28
+      },
+      "class_path": "bestopt.env.controllers.thermal.SupervisoryController"
+    },
+    "der_controller_SFH_5": {
+      "system_id": "der_system_SFH_5",
+      "domain": "electrical",
+      "parameters": {
+        "domain": "electrical",
+        "type": "rule-based",
+        "mode": "self_consumption",
+        "bat_soc_min": 0.1,
+        "bat_soc_max": 0.9,
+        "ev_soc_min": 0.2,
+        "ev_soc_target": 0.8,
+        "ev_v2g_enabled": true,
+        "max_grid_import": 10000,
+        "max_grid_export": 5000,
+        "system_config": {
+          "pv": {
+            "rated_capacity_kW": 13.01
+          },
+          "bat": {
+            "rated_capacity_kWh": 7.36,
+            "initial_soc": 0.33
+          },
+          "ev": {
+            "rated_capacity_kWh": 5,
+            "initial_soc": 0.3
+          }
+        }
+      },
+      "class_path": "bestopt.env.controllers.electrical.SupervisoryController"
+    }
+  },
+  "thermal_zone_modules": {
+    "SFH_1.zone0": {
+      "parameters": {
+        "model_args": {
+          "para": {
+            "Int_h": 8,
+            "Ext_h": 14,
+            "epochs": 20
+          },
+          "modeltype": "PI-modnn",
+          "startday": 1,
+          "trainday": 180,
+          "testday": 1,
+          "datapath": "/home/zjiang19/Documents/GitHub/BEST_OPT/bestopt/data/SFH/BLDG/clean/SFH_1.csv",
+          "temp_unit": "C",
+          "device": "cuda:0",
+          "save_name": "SFH_1"
+        },
+        "model_path": "/home/zjiang19/Documents/GitHub/BEST_OPT/bestopt/examples/Saved/SFH_1/Trained_mdlEnco48_Deco96/PI-modnn_180daysTest_on07-01.pth",
+        "scaler_path": "/home/zjiang19/Documents/GitHub/BEST_OPT/bestopt/examples/Scaler/SFH_1/ModNN_scaler.pkl",
+        "historical_data_path": "/home/zjiang19/Documents/GitHub/BEST_OPT/bestopt/data/SFH/BLDG/clean/SFH_1.csv",
+        "encoder_length": 48,
+        "retrain": "Off",
+        "simulation_start_time": "2023-08-01 00:00:00"
+      },
+      "class_path": "bestopt.env.modules.building.thermalzone.ThermalDynamicsModule"
+    },
+    "SFH_2.zone0": {
+      "parameters": {
+        "model_args": {
+          "para": {
+            "Int_h": 8,
+            "Ext_h": 14,
+            "epochs": 20
+          },
+          "modeltype": "PI-modnn",
+          "startday": 1,
+          "trainday": 180,
+          "testday": 1,
+          "datapath": "/home/zjiang19/Documents/GitHub/BEST_OPT/bestopt/data/SFH/BLDG/clean/SFH_1.csv",
+          "temp_unit": "C",
+          "device": "cuda:0",
+          "save_name": "SFH_1"
+        },
+        "model_path": "/home/zjiang19/Documents/GitHub/BEST_OPT/bestopt/examples/Saved/SFH_1/Trained_mdlEnco48_Deco96/PI-modnn_180daysTest_on07-01.pth",
+        "scaler_path": "/home/zjiang19/Documents/GitHub/BEST_OPT/bestopt/examples/Scaler/SFH_1/ModNN_scaler.pkl",
+        "historical_data_path": "/home/zjiang19/Documents/GitHub/BEST_OPT/bestopt/data/SFH/BLDG/clean/SFH_1.csv",
+        "encoder_length": 48,
+        "retrain": "Off",
+        "simulation_start_time": "2023-08-01 00:00:00"
+      },
+      "class_path": "bestopt.env.modules.building.thermalzone.ThermalDynamicsModule"
+    },
+    "SFH_3.zone0": {
+      "parameters": {
+        "model_args": {
+          "para": {
+            "Int_h": 8,
+            "Ext_h": 14,
+            "epochs": 20
+          },
+          "modeltype": "PI-modnn",
+          "startday": 1,
+          "trainday": 180,
+          "testday": 1,
+          "datapath": "/home/zjiang19/Documents/GitHub/BEST_OPT/bestopt/data/SFH/BLDG/clean/SFH_1.csv",
+          "temp_unit": "C",
+          "device": "cuda:0",
+          "save_name": "SFH_1"
+        },
+        "model_path": "/home/zjiang19/Documents/GitHub/BEST_OPT/bestopt/examples/Saved/SFH_1/Trained_mdlEnco48_Deco96/PI-modnn_180daysTest_on07-01.pth",
+        "scaler_path": "/home/zjiang19/Documents/GitHub/BEST_OPT/bestopt/examples/Scaler/SFH_1/ModNN_scaler.pkl",
+        "historical_data_path": "/home/zjiang19/Documents/GitHub/BEST_OPT/bestopt/data/SFH/BLDG/clean/SFH_1.csv",
+        "encoder_length": 48,
+        "retrain": "Off",
+        "simulation_start_time": "2023-08-01 00:00:00"
+      },
+      "class_path": "bestopt.env.modules.building.thermalzone.ThermalDynamicsModule"
+    },
+    "SFH_4.zone0": {
+      "parameters": {
+        "model_args": {
+          "para": {
+            "Int_h": 8,
+            "Ext_h": 14,
+            "epochs": 20
+          },
+          "modeltype": "PI-modnn",
+          "startday": 1,
+          "trainday": 180,
+          "testday": 1,
+          "datapath": "/home/zjiang19/Documents/GitHub/BEST_OPT/bestopt/data/SFH/BLDG/clean/SFH_1.csv",
+          "temp_unit": "C",
+          "device": "cuda:0",
+          "save_name": "SFH_1"
+        },
+        "model_path": "/home/zjiang19/Documents/GitHub/BEST_OPT/bestopt/examples/Saved/SFH_1/Trained_mdlEnco48_Deco96/PI-modnn_180daysTest_on07-01.pth",
+        "scaler_path": "/home/zjiang19/Documents/GitHub/BEST_OPT/bestopt/examples/Scaler/SFH_1/ModNN_scaler.pkl",
+        "historical_data_path": "/home/zjiang19/Documents/GitHub/BEST_OPT/bestopt/data/SFH/BLDG/clean/SFH_1.csv",
+        "encoder_length": 48,
+        "retrain": "Off",
+        "simulation_start_time": "2023-08-01 00:00:00"
+      },
+      "class_path": "bestopt.env.modules.building.thermalzone.ThermalDynamicsModule"
+    },
+    "SFH_5.zone0": {
+      "parameters": {
+        "model_args": {
+          "para": {
+            "Int_h": 8,
+            "Ext_h": 14,
+            "epochs": 20
+          },
+          "modeltype": "PI-modnn",
+          "startday": 1,
+          "trainday": 180,
+          "testday": 1,
+          "datapath": "/home/zjiang19/Documents/GitHub/BEST_OPT/bestopt/data/SFH/BLDG/clean/SFH_1.csv",
+          "temp_unit": "C",
+          "device": "cuda:0",
+          "save_name": "SFH_1"
+        },
+        "model_path": "/home/zjiang19/Documents/GitHub/BEST_OPT/bestopt/examples/Saved/SFH_1/Trained_mdlEnco48_Deco96/PI-modnn_180daysTest_on07-01.pth",
+        "scaler_path": "/home/zjiang19/Documents/GitHub/BEST_OPT/bestopt/examples/Scaler/SFH_1/ModNN_scaler.pkl",
+        "historical_data_path": "/home/zjiang19/Documents/GitHub/BEST_OPT/bestopt/data/SFH/BLDG/clean/SFH_1.csv",
+        "encoder_length": 48,
+        "retrain": "Off",
+        "simulation_start_time": "2023-08-01 00:00:00"
+      },
+      "class_path": "bestopt.env.modules.building.thermalzone.ThermalDynamicsModule"
+    }
+  },
+  "electrical_zone_modules": {
+    "SFH_1.zone0": {
+      "parameters": {
+        "lighting": {
+          "daytime": 755.87,
+          "nighttime": 2282.84
+        },
+        "appliance": {
+          "cooking": 1868.28,
+          "tv": 184.75,
+          "pc": 442.88,
+          "dishwashing": 881.55
+        }
+      },
+      "class_path": "bestopt.env.modules.building.electricalzone.ElectricalDynamicModule"
+    },
+    "SFH_2.zone0": {
+      "parameters": {
+        "lighting": {
+          "daytime": 585.53,
+          "nighttime": 1468.28
+        },
+        "appliance": {
+          "cooking": 2282.26,
+          "tv": 184.0,
+          "pc": 432.13,
+          "dishwashing": 940.38
+        }
+      },
+      "class_path": "bestopt.env.modules.building.electricalzone.ElectricalDynamicModule"
+    },
+    "SFH_3.zone0": {
+      "parameters": {
+        "lighting": {
+          "daytime": 508.68,
+          "nighttime": 1361.86
+        },
+        "appliance": {
+          "cooking": 2294.89,
+          "tv": 200.22,
+          "pc": 402.43,
+          "dishwashing": 1108.82
+        }
+      },
+      "class_path": "bestopt.env.modules.building.electricalzone.ElectricalDynamicModule"
+    },
+    "SFH_4.zone0": {
+      "parameters": {
+        "lighting": {
+          "daytime": 496.43,
+          "nighttime": 2235.01
+        },
+        "appliance": {
+          "cooking": 2361.08,
+          "tv": 223.24,
+          "pc": 436.07,
+          "dishwashing": 817.89
+        }
+      },
+      "class_path": "bestopt.env.modules.building.electricalzone.ElectricalDynamicModule"
+    },
+    "SFH_5.zone0": {
+      "parameters": {
+        "lighting": {
+          "daytime": 538.93,
+          "nighttime": 1690.05
+        },
+        "appliance": {
+          "cooking": 1835.89,
+          "tv": 233.53,
+          "pc": 331.07,
+          "dishwashing": 979.27
+        }
+      },
+      "class_path": "bestopt.env.modules.building.electricalzone.ElectricalDynamicModule"
+    }
+  },
+  "system_building_map": {
+    "hvac_system_SFH_1": [
+      "SFH_1"
+    ],
+    "der_system_SFH_1": [
+      "SFH_1"
+    ],
+    "hvac_system_SFH_2": [
+      "SFH_2"
+    ],
+    "der_system_SFH_2": [
+      "SFH_2"
+    ],
+    "hvac_system_SFH_3": [
+      "SFH_3"
+    ],
+    "der_system_SFH_3": [
+      "SFH_3"
+    ],
+    "hvac_system_SFH_4": [
+      "SFH_4"
+    ],
+    "der_system_SFH_4": [
+      "SFH_4"
+    ],
+    "hvac_system_SFH_5": [
+      "SFH_5"
+    ],
+    "der_system_SFH_5": [
+      "SFH_5"
+    ]
+  },
+  "building_system_map": {
+    "SFH_1": {
+      "thermal": "hvac_system_SFH_1",
+      "electrical": "der_system_SFH_1"
+    },
+    "SFH_2": {
+      "thermal": "hvac_system_SFH_2",
+      "electrical": "der_system_SFH_2"
+    },
+    "SFH_3": {
+      "thermal": "hvac_system_SFH_3",
+      "electrical": "der_system_SFH_3"
+    },
+    "SFH_4": {
+      "thermal": "hvac_system_SFH_4",
+      "electrical": "der_system_SFH_4"
+    },
+    "SFH_5": {
+      "thermal": "hvac_system_SFH_5",
+      "electrical": "der_system_SFH_5"
+    }
+  },
+  "disturbances": {
+    "weather": {
+      "parameters": {
+        "file_path": "/home/zjiang19/Documents/GitHub/BEST_OPT/bestopt/data/SFH/DIST/weather/weather.csv",
+        "simulation_start_time": "2023-08-01 00:00:00"
+      },
+      "class_path": "bestopt.env.disturbances.weather.WeatherModule"
+    },
+    "occupancy": {
+      "parameters": {
+        "file_path": "/home/zjiang19/Documents/GitHub/BEST_OPT/bestopt/data/SFH/DIST/occupancy/occupancy.csv",
+        "simulation_start_time": "2023-08-01 00:00:00"
+      },
+      "class_path": "bestopt.env.disturbances.occupancy.OccupancyModule"
+    },
+    "price": {
+      "parameters": {},
+      "class_path": "bestopt.env.disturbances.price.PriceModule"
+    }
+  },
+  "environment": {
+    "parameters": {
+      "resolution": 900,
+      "duration": 172800,
+      "enable_history": true,
+      "logging_level": "INFO",
+      "simulation_start_time": "2023-08-01 00:00:00"
+    },
+    "class_path": "bestopt.environment.BESTOptEnvironment"
+  }
+}

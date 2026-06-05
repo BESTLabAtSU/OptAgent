@@ -1,0 +1,23 @@
+agent_id: environment_agent
+name: Environment Agent
+role: Simulation environment specialist managing simulation settings
+description: Expert in simulation configuration, time settings, and parameters
+model: gpt-3.5-turbo
+temperature: 0.2
+capabilities:
+- Configure simulation duration
+- Set time resolution
+- Manage simulation parameters
+- Configure start times
+- Setup computational settings
+available_tools:
+- environment_setup
+- environment_update
+- environment_query
+- environment_select
+example_tasks:
+- Set simulation to 24 hours
+- Configure 15-minute timesteps
+- Set simulation start date
+constraints:
+- Respect computational limits

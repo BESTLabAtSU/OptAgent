@@ -57,6 +57,12 @@ class OpenAIClient:
         except asyncio.TimeoutError:
             raise RuntimeError(f"OpenAI request timed out after {self.timeout}s")
 
+    # Add this as a method of OpenAIClient
+    def _get_token_param(self, model: str) -> str:
+        """Newer OpenAI models use max_completion_tokens instead of max_tokens"""
+        new_param_models = ("gpt-5", "o1", "o3", "o4")
+        return "max_completion_tokens" if any(model.startswith(p) for p in new_param_models) else "max_tokens"
+
     async def generate(
         self,
         prompt: str,
@@ -79,7 +85,7 @@ class OpenAIClient:
                 [{"role": "user", "content": prompt}]
             ),
             "temperature": t,
-            "max_tokens": mt,
+            self._get_token_param(m): mt,
             "stream": False
         }
 
@@ -107,7 +113,7 @@ class OpenAIClient:
             "model": m,
             "messages": messages,
             "temperature": t,
-            "max_tokens": mt,
+            self._get_token_param(m): mt,
             "stream": False
         }
         data = await self._post_json("/chat/completions", payload)

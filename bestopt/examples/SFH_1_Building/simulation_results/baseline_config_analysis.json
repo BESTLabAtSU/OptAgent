@@ -1,0 +1,74 @@
+{
+  "comfort": {
+    "temp_above_cooling_frq": 44,
+    "temp_below_heating_frq": 0,
+    "total_violations_frq": 44,
+    "violation_rate": 45.83333333333333,
+    "temp_above_cooling_c_h": 3.421712875366211,
+    "temp_below_heating_c_h": 0.0,
+    "total_violation_c_h": 3.421712875366211,
+    "avg_temperature": 24.7019837697347,
+    "min_temperature": 22.573223114013672,
+    "max_temperature": 26.610504150390625,
+    "temp_std": 1.0864545315975882,
+    "temp_range": 4.037281036376953
+  },
+  "cost": {
+    "import_cost": 7.5082883966458756,
+    "export_revenue": 1.2086945060057734,
+    "net_cost": 6.299593890640102
+  },
+  "flexibility": {
+    "battery_soc_avg": 77.70506400105438,
+    "battery_soc_min": 33.5616609375,
+    "battery_soc_max": 89.88993285539351,
+    "battery_cycles_efc": 0.48561028776379966,
+    "ev_tesla_cycles_efc": 0.6387544660209463,
+    "ev_nissan_cycles_efc": 0.4561238388227898,
+    "load_factor": 23.923365897693785,
+    "peak_to_average_ratio": 4.180013816937023,
+    "peak_consumption": 1.4369293896032178,
+    "off_peak_consumption": 72.92748988205392,
+    "total_consumption": 74.36441927165714,
+    "peak_max": 1.9335577206043069,
+    "off_peak_max": 10.0
+  },
+  "operation": {
+    "hvac_runtime_hours": 10.25,
+    "hvac_energy_kwh": 10.380376407152472,
+    "hvac_avg_power": 1.01271964947829,
+    "hvac_avg_cop": 4.481386351176068,
+    "pv_total_generation": 33.66172893469799,
+    "pv_peak_output": 3.200459394944,
+    "pv_capacity_factor": 43.8240847911239,
+    "self_consumption": 10.490452887062201,
+    "self_consumption_rate": 31.164331776936166,
+    "grid_import_total": 74.36441927165714,
+    "grid_export_total": 23.171276047635786,
+    "net_grid_energy": 51.193143224021355
+  },
+  "efficiency": {
+    "total_consumption": 35.68037640715247,
+    "grid_dependency": 22.11397099171612,
+    "renewable_fraction": 21.958303063933073,
+    "load_breakdown": {
+      "HVAC": 10.380376407152472,
+      "Lighting": 10.05,
+      "Cooking": 7.0,
+      "PC": 5.5,
+      "TV": 2.75
+    }
+  },
+  "summary": {
+    "simulation_duration_hours": 24.0,
+    "total_cost": 6.299593890640102,
+    "comfort_violation_rate": 45.83333333333333,
+    "renewable_usage": 21.958303063933073,
+    "peak_demand": 6.214352765642129,
+    "average_demand": 1.4866823502980198,
+    "grid_dependency": 22.11397099171612,
+    "self_consumption_rate": 31.164331776936166,
+    "battery_cycles": 0.48561028776379966,
+    "peak_consumption_ratio": 1.9322807919121092
+  }
+}

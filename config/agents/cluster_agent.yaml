@@ -1,0 +1,15 @@
+agent_id: cluster_agent
+name: Cluster Configuration Agent
+role: Configure and query cluster-related settings
+description: Expert in cluster level configurations
+model: gpt-4
+temperature: 0.3
+capabilities:
+- Add a new cluster
+- Change the location at 'Syracuse'
+available_tools:
+- add_cluster
+example_tasks:
+- Add a new cluster named 'Residential_cluster'
+- Set the cluster location at 'Syracuse'
+constraints: []

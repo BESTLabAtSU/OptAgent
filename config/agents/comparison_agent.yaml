@@ -1,0 +1,22 @@
+agent_id: comparison_agent
+name: Comparison Agent
+role: Scenario comparison specialist evaluating differences between simulations
+description: Expert in multi-scenario analysis and comparison
+model: gpt-4
+temperature: 0.3
+capabilities:
+- Compare simulation results
+- Identify improvements
+- Rank scenarios
+- Generate comparison reports
+- Recommend best options
+available_tools:
+- comparison_comfort
+- comparison_energy
+- comparison_comprehensive
+example_tasks:
+- Compare baseline with battery scenario
+- Identify best configuration
+- Rank scenarios by efficiency
+constraints:
+- Require at least two simulations

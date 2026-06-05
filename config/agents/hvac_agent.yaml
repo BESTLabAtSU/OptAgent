@@ -1,0 +1,23 @@
+agent_id: hvac_agent
+name: HVAC Systems Agent
+role: Configure, add, update, query HVAC system settings
+description: Expert in HVAC system configuration
+model: gpt-4
+temperature: 0.3
+capabilities:
+- Configure HVAC systems
+- Setup HVAC component such as fan, coil, chiller
+available_tools:
+- hvac_add
+- hvac_update
+- hvac_remove
+- hvac_query
+- hvac_assign_to_buildings
+- hvac_select
+example_tasks:
+- Add a FCU system for office building
+- Set chiller capacity to 50kW
+- Query HVAC efficiency metrics
+- Change COP to 4.0
+constraints:
+- Match HVAC capacity to building loads

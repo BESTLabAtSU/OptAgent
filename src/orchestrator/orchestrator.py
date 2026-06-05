@@ -1,867 +1,1385 @@
 """
-Main orchestrator for managing agent coordination and task routing - FIXED VERSION
+Orchestrator
 """
-import asyncio
-from typing import Dict, Any, List, Optional, Set
-from dataclasses import dataclass, field
-from datetime import datetime
+from typing import Dict, Any, List, Optional, Callable, Awaitable
 import json
+from pathlib import Path
+import logging
+import asyncio
+from datetime import datetime
 
-from ..core.message_bus import Message, MessageType, get_message_bus
-from ..core.base_agent import AgentCapability, AgentStatus
-from ..agents.registry import AgentRegistry
-from ..llm.ollama_client import OllamaClient
+ReasoningCallback = Callable[[Dict[str, Any]], Awaitable[None]]
 
-
-@dataclass
-class Task:
-    """Enhanced task representation with execution plan"""
-    id: str
-    user_request: str
-    intent: Optional[str] = None
-    execution_plan: List[Dict[str, Any]] = field(default_factory=list)  # Added
-    selected_agents: List[str] = field(default_factory=list)
-    subtasks: List[Dict[str, Any]] = field(default_factory=list)
-    status: str = "pending"
-    created_at: datetime = field(default_factory=datetime.now)
-    completed_at: Optional[datetime] = None
-    results: List[Dict[str, Any]] = field(default_factory=list)
-    context: Dict[str, Any] = field(default_factory=dict)
+from ..core.data_class import IntelligenceMode, AgentGenerationMode, OrchestratorResponse, FailureType
+from ..core.utils import safe_json_parse
+from ..core.matrix import MetricsCollector
+from ..agents.factory import AgentFactory
+from ..mcp_center.mcp_client import MCPClient, MCPClientPool
+from ..llm.llm_interface import BaseLLMClient, LLMResponse
 
 
 class Orchestrator:
+    """Orchestrator with static/dynamic agent generation and dual LLM support"""
+
+    WORKFLOW_PATTERNS = """
+    ## Common Workflow Patterns (chain of thought):
+
+    ### Pattern 1: Comparison Study 
+    Keywords: "compare", "change", "upgrade", "after", "before vs after", "how will X change", "what if"
+    When user asks about impact of changes or comparisons:
+    1. FIRST: Run simulation with CURRENT config and save this run with a name such as "sim_old"
+    2. THEN: Update relevant system parameters (HVAC, DER, controllers...) with requested changes
+    3. Save the updated configuration using config_save with descriptive name such as "new_config"
+    4. THEN: Run simulation with UPDATED config and this run with descriptive name such as "sim_new"
+    5. FINALLY: Call comparison tools to compare differences with name "sim_old" and "sim_new"
+
+    ### Pattern 2: Configuration
+    Keywords: "update", "change", "set", "modify", "replace", "upgrade"
+    When modifying system parameters:
+    Use 'Config Agent' for file level operation like: save, validate, create, or list 
+    Use 'Component Agent' such as 'hvac_agent, der_agent, controller_agent, building_agent, disturbance_agent, environment_agent' for add, update, query...
+
+    ### Pattern 3: Full Analysis
+    Keywords: "analyze", "evaluate", "assess performance"
+    After any simulation:
+    1. Use analysis_comprehensive OR multiple analysis tools (comfort, energy, cost, flexibility)
+    2. Analysis requires a completed simulation name
+
+    ## Key Dependencies:
+    - comparison_* tools REQUIRE TWO completed simulations
+    - analysis_* tools REQUIRE ONE completed simulation  
+    - "Baseline" simulation should be run BEFORE making changes for comparison studies
     """
-    Central orchestrator that:
-    1. Receives user requests from the concierge
-    2. Analyzes and decomposes tasks
-    3. Selects appropriate agents
-    4. Coordinates agent execution
-    5. Aggregates results
-    """
 
-    def __init__(self, llm_client: Optional[OllamaClient] = None):
-        self.llm_client = llm_client or OllamaClient()
-        self.message_bus = get_message_bus()
-        self.agent_registry = AgentRegistry()
-        self.active_tasks: Dict[str, Task] = {}
-        self.task_history: List[Task] = []
-        self._running = False
-        self._task_lock = asyncio.Lock()
+    MAX_STEP_RETRIES = 2          # Max retries per execution step
+    TIMEOUT_BY_MODEL = {
+        "qwen3:1.7b": 90, "qwen3:4b": 90, "qwen3:8b": 90,
+        "qwen3:14b": 90, "gpt-4o-mini": 90, "gpt-5.2": 90,
+    }
+    STEP_TIMEOUT_DEFAULT = 120
 
-    async def initialize(self) -> None:
-        """Initialize the orchestrator"""
-        await self.message_bus.subscribe(
-            MessageType.TASK_REQUEST.value,
-            self._handle_task_request
-        )
-        await self.agent_registry.initialize()
-        self._running = True
-        print("Orchestrator initialized successfully")
+    def __init__(self,
+                 llm_client: BaseLLMClient,
+                 mcp_server_path: str = None,
+                 intelligence_mode: IntelligenceMode = IntelligenceMode.DECENTRALIZED,
+                 agent_generation_mode: AgentGenerationMode = AgentGenerationMode.STATIC,
+                 orchestrator_model: str = "gpt-4o-mini",
+                 agent_model: str = "gpt-3.5-turbo",
+                 agent_llm_client: BaseLLMClient = None,
+                 config_dir: Path = Path("config"),
+                 log_dir: Path = Path("logs"),
+                 use_client_pool: bool = False,
+                 pool_size: int = 3,
+                 use_two_stage_planning: bool = False):
 
-    async def shutdown(self) -> None:
-        """Shutdown the orchestrator"""
-        self._running = False
-        await self.agent_registry.shutdown()
+        self.llm_client = llm_client
+        self.agent_llm_client = agent_llm_client or llm_client
+        self.mcp_server_path = mcp_server_path
+        self.intelligence_mode = intelligence_mode
+        self.agent_generation_mode = agent_generation_mode
+        self.orchestrator_model = orchestrator_model
+        self.agent_model = agent_model
+        self.config_dir = config_dir
+        self.log_dir = log_dir
+        self.use_client_pool = use_client_pool
+        self.pool_size = pool_size
+        self.use_two_stage_planning = use_two_stage_planning
+        self.current_metrics: MetricsCollector = None
 
-    async def _handle_task_request(self, message: Message) -> None:
-        """Handle incoming task requests"""
+        self.log_dir.mkdir(parents=True, exist_ok=True)
+        self.orchestrator_log_dir = log_dir / "orchestrator"
+        self.orchestrator_log_dir.mkdir(exist_ok=True)
+
+        self.logger = logging.getLogger("Orchestrator")
+        self.mcp_client = MCPClient(server_script_path=mcp_server_path)
+        self.mcp_client_pool = None
+        self.agent_factory = None
+        self.agents = {}
+
+    async def initialize(self):
+        """Initialize orchestrator"""
         try:
-            payload = message.payload
-            request = payload.get("request", "")
-            context = payload.get("context", {})
+            await self.mcp_client.connect()
+            self.logger.info("Connected to MCP server")
 
-            # Create task
-            async with self._task_lock:
-                task = Task(
-                    id=message.id,
-                    user_request=request,
-                    context=context
+            if self.use_client_pool:
+                self.mcp_client_pool = MCPClientPool(
+                    pool_size=self.pool_size,
+                    server_script_path=self.mcp_server_path
                 )
-                self.active_tasks[task.id] = task
+                await self.mcp_client_pool.initialize()
 
-            # Process the task
-            result = await self.process_task(task)
-
-            # Send response
-            response = Message(
-                type=MessageType.TASK_RESPONSE,
-                sender="orchestrator",
-                recipient=message.sender,
-                payload=result,
-                correlation_id=message.id
+            self.agent_factory = AgentFactory(
+                mcp_client=self.mcp_client,
+                llm_client=self.agent_llm_client,
+                config_dir=self.config_dir / "agents",
+                response_log_dir=self.log_dir / "agent_responses",
+                default_model=self.agent_model,
+                intelligence_mode=self.intelligence_mode
             )
-            await self.message_bus.publish(response)
 
-            # Move to history
-            async with self._task_lock:
-                task.status = "completed"
-                task.completed_at = datetime.now()
-                self.task_history.append(task)
-                if task.id in self.active_tasks:
-                    del self.active_tasks[task.id]
+            await self.agent_factory.initialize()
 
-        except Exception as e:
-            print(f"Error handling task request: {e}")
-            import traceback
-            traceback.print_exc()
-
-            # Send error response
-            error_response = Message(
-                type=MessageType.ERROR,
-                sender="orchestrator",
-                recipient=message.sender,
-                payload={"error": str(e)},
-                correlation_id=message.id
-            )
-            await self.message_bus.publish(error_response)
-
-            # Clean up task
-            async with self._task_lock:
-                if message.id in self.active_tasks:
-                    task = self.active_tasks[message.id]
-                    task.status = "failed"
-                    self.task_history.append(task)
-                    del self.active_tasks[message.id]
-
-    async def process_task(self, task: Task) -> Dict[str, Any]:
-        """
-        UPDATED: Enhanced task processing with multi-step support
-        """
-        try:
-            # Step 1: Analyze task complexity and intent
-            analysis = await self._analyze_task_complexity(task.user_request)
-            task.intent = analysis.get("intent", "unknown")
-            is_complex = analysis.get("is_complex", False)
-
-            print(f"Task analysis - Intent: {task.intent}, Complex: {is_complex}")
-
-            if is_complex:
-                # Step 2: Create execution plan for complex tasks
-                task.execution_plan = await self._create_execution_plan(task)
-                # Step 3: Execute multi-step plan
-                results = await self._execute_multi_step_plan(task)
+            if self.intelligence_mode == IntelligenceMode.SINGLE_AGENT_REACT:
+                # Create single universal agent with ALL tools
+                all_tool_names = list(self.mcp_client.available_tools.keys())
+                universal_agent = await self.agent_factory.create_agent_from_spec({
+                    "agent_id": "universal_agent",
+                    "name": "Universal Agent",
+                    "role": "General-purpose building energy agent with access to all tools",
+                    "description": "Handles all building energy tasks autonomously using any available tool",
+                    "available_tools": all_tool_names,
+                    "model": self.agent_model,
+                    "temperature": 0.3,
+                })
+                # Force decentralized behavior so agent plans its own tools
+                universal_agent.intelligence_mode = IntelligenceMode.DECENTRALIZED
+                self.agents = {"universal_agent": universal_agent}
             else:
-                # Simple task - use existing logic
-                task.intent = await self._analyze_intent(task.user_request)
-                task.subtasks = await self._decompose_task(task)
-                task.selected_agents = await self._select_agents(task)
-                results = await self._execute_with_agents(task)
+                self.agents = await self.agent_factory.create_all_agents(model_override=self.agent_model)
 
-            task.results = results
+            self.logger.info(
+                f"Initialized {len(self.agents)} agents "
+                f"(intelligence: {self.intelligence_mode.value}, "
+                f"generation: {self.agent_generation_mode.value}, "
+                f"two_stage: {self.use_two_stage_planning})"
+            )
 
-            # Step 4: Aggregate and format results
-            final_result = await self._aggregate_results(task)
-            return final_result
+            orch_provider = getattr(self.llm_client, 'provider', 'unknown')
+            agent_provider = getattr(self.agent_llm_client, 'provider', 'unknown')
+            self.logger.info(
+                f"LLM clients - Orchestrator: {orch_provider}/{self.orchestrator_model}, "
+                f"Agents: {agent_provider}/{self.agent_model}"
+            )
 
         except Exception as e:
-            task.status = "failed"
-            raise e
+            self.logger.error(f"Failed to initialize: {e}")
+            raise
 
-    async def _analyze_task_complexity(self, user_request: str) -> Dict[str, Any]:
-        """
-        Determine if task is simple or requires multi-step execution
-        """
-        prompt = f"""
-        Analyze this request and determine if it requires multiple steps:
+    async def shutdown(self):
+        """Shutdown orchestrator"""
+        try:
+            if self.mcp_client_pool:
+                await self.mcp_client_pool.shutdown()
+            if self.mcp_client:
+                await self.mcp_client.disconnect()
+            self.logger.info("Orchestrator shutdown complete")
+        except Exception as e:
+            self.logger.error(f"Error during shutdown: {e}")
 
-        User request: {user_request}
+    async def process_request(
+            self,
+            user_request: str,
+            context: Optional[Dict[str, Any]] = None,
+            reasoning_callback: Optional[ReasoningCallback] = None
+    ) -> Dict[str, Any]:
+        """Process user request with real-time reasoning callbacks AND complete metrics"""
 
-        Determine:
-        1. The intent (what the user wants to achieve)
-        2. Whether this requires multiple steps
-        3. Whether this task (is_complex: true/false, true when need multiple steps)
-        4. If complex, what type: comparison, sequential, unclear
+        self.current_metrics = MetricsCollector()
+        self.current_metrics.set_config(
+            intelligence_mode=self.intelligence_mode.value,
+            agent_gen_mode=self.agent_generation_mode.value,
+            orchestrator_model=self.orchestrator_model,
+            agent_model=self.agent_model,
+            provider=getattr(self.llm_client, 'provider', 'unknown').value
+            if hasattr(self.llm_client, 'provider') else 'unknown',
+            two_stage_planning=self.use_two_stage_planning
+        )
 
-        Examples of complex tasks:
-        - "Compare flexibility with current vs 20kWh battery" (comparison)
-        - "Update battery then run simulation" (sequential)
-
-        Examples of simple tasks:
-        - "Show current DER configuration" (simple query)
-        - "Update battery to 20kWh" (simple update)
-        - "Add a 5kW PV" (simple add)
-        - "What's the controller setpoint?" (simple query)
-
-        Return as JSON:
-        {{
-            "intent": "brief description",
-            "is_complex": true/false,
-            "complexity_type": "comparison/sequential/optimization/none"
-        }}
-
-        Respond only with valid JSON.
-        """
+        agent_modifications = []
 
         try:
-            response = await self.llm_client.generate(prompt, temperature=0.1)
-            if response.startswith("```json"):
-                response = response[7:]
-            if response.endswith("```"):
-                response = response[:-3]
-            return json.loads(response.strip())
-        except Exception as e:
-            print(f"Warning: Failed to analyze complexity: {e}")
-            return {"intent": "unknown", "is_complex": False}
+            # === DYNAMIC AGENT CHECK ===
+            if self.agent_generation_mode == AgentGenerationMode.DYNAMIC:
+                self.current_metrics.start_phase("agent_check")
 
-    async def _create_execution_plan(self, task: Task) -> List[Dict[str, Any]]:
-        """
-        DYNAMIC: Create execution plan using LLM to understand task requirements
-        """
-        # First, analyze what the task requires
-        analysis_prompt = f"""
-        Analyze this request and determine what steps are needed:
-        Request: {task.user_request}
+                if reasoning_callback:
+                    await reasoning_callback({
+                        "phase": "agent_check",
+                        "source": "orchestrator",
+                        "title": "Checking agent capabilities...",
+                        "content": {"request": user_request[:100]}
+                    })
 
-        Identify the pattern:
-        1. Is this a comparison task? (needs baseline + change + comparison)
-        2. Is this a sequential task? (needs specific order of operations)
-        3. Is this an optimization task? (needs analysis + optimization)
-        4. Is this a simple multi-step task? (needs multiple operations but no comparison)
+                agent_modifications = await self._check_and_prepare_agents(
+                    user_request, context, reasoning_callback
+                )
+                self.current_metrics.end_phase("agent_check")
+                self.current_metrics.metrics.orchestrator.agent_modifications = agent_modifications
 
-        Also identify:
-        - What needs to be queried/retrieved
-        - What needs to be modified/updated
-        - What needs to be simulated/calculated
-        - What needs to be compared/analyzed
+            # === PLANNING PHASE ===
+            self.current_metrics.start_phase("planning")
 
-        Return as JSON:
-        {{
-            "pattern": "comparison/sequential/optimization/multi-step",
-            "requires_baseline": true/false,
-            "requires_update": true/false,
-            "requires_simulation": true/false,
-            "requires_comparison": true/false,
-            "update_details": "what to update if applicable"
-        }}
+            # FIX: Add reasoning step for planning start (was in original)
+            self.current_metrics.add_reasoning_step("planning_start", {
+                "request": user_request,
+                "mode": self.intelligence_mode.value,
+                "two_stage": self.use_two_stage_planning
+            })
 
-        Respond only with valid JSON.
-        """
+            if reasoning_callback:
+                await reasoning_callback({
+                    "phase": "planning_start",
+                    "source": "orchestrator",
+                    "title": "Creating execution plan...",
+                    "content": {
+                        "mode": self.intelligence_mode.value,
+                        "two_stage": self.use_two_stage_planning,
+                        "available_agents": list(self.agents.keys())
+                    }
+                })
 
-        try:
-            analysis_response = await self.llm_client.generate(analysis_prompt, temperature=0.1)
-            if analysis_response.startswith("```json"):
-                analysis_response = analysis_response[7:]
-            if analysis_response.endswith("```"):
-                analysis_response = analysis_response[:-3]
-            task_analysis = json.loads(analysis_response.strip())
-        except Exception as e:
-            print(f"Warning: Failed to analyze task pattern: {e}")
-            task_analysis = {"pattern": "multi-step"}
+            execution_plan = await self._create_execution_plan(
+                user_request, context, reasoning_callback
+            )
 
-        # Now create the execution plan based on the analysis
-        plan_prompt = f"""
-        Create an execution plan for this task:
-        Request: {task.user_request}
-        Task Pattern: {task_analysis.get('pattern', 'multi-step')}
-        Task Analysis: {json.dumps(task_analysis)}
+            self.current_metrics.end_phase("planning")
+            self.current_metrics.metrics.orchestrator.execution_plan = execution_plan
 
-        Available agents and their capabilities:
-        - der_manager: 
-          * Query DER configurations (action_type: "query")
-          * Update DER systems (action_type: "update") 
-          * Add new DER systems (action_type: "add")
-        - simulation:
-          * Run simulations with given configs (action_type: "run")
-        - analyzer:
-          * Compare simulation results (action_type: "compare")
-          * Analyze single results (action_type: "analyze")
-        - optimizer:
-          * Optimize configurations (action_type: "optimize")
+            # FIX: Add reasoning step for planning complete (was in original)
+            self.current_metrics.add_reasoning_step("planning_complete", {
+                "steps": len(execution_plan),
+                "agents": list(set(s.get("agent_id") for s in execution_plan))
+            })
 
-        Based on the task analysis, create the appropriate step sequence.
+            # === EXECUTION PHASE ===
+            self.current_metrics.start_phase("execution")
+            agent_results = await self._execute_plan(
+                execution_plan, context, reasoning_callback
+            )
+            self.current_metrics.end_phase("execution")
 
-        Guidelines:
-        - For queries: Use der_manager with action_type "query"
-        - For updates: Use der_manager with action_type "update" and specify what to update
-        - For simulations: Use simulation with action_type "run"
-        - For comparisons: Run baseline, make change, run again, then compare
-        - Each step should have clear dependencies
-        - Save important results for later steps using save_as
+            # FIX: Record agent results (MISSING in revised version)
+            for step_id, result in agent_results.items():
+                agent_id = result.get("agent", "unknown")
+                agent_model = result.get("metrics", {}).get("model", self.agent_model)
+                self.current_metrics.record_agent_result(agent_id, agent_model, result)
 
-        Return a JSON with 'steps' array where each step has:
-        {{
-            "step_id": "step_1", "step_2", etc.,
-            "agent": "der_manager/simulation/analyzer/optimizer",
-            "action": "Human-readable description of what this step does",
-            "action_type": "query/update/add/run/compare/analyze/optimize",
-            "depends_on": ["step_ids this depends on"],
-            "save_as": "key_name to save result",
-            "parameters": {{
-                // Specific parameters based on action_type
-                // For query: {{"query_type": "system/controller"}}
-                // For update: {{"system_id": "...", "updates": {{...}}}}
-                // For run: {{"use_config": "saved_config_key"}}
-                // For compare: {{"baseline": "key1", "updated": "key2"}}
-            }}
-        }}
+                if "reasoning_trace" in result:
+                    self.current_metrics.add_reasoning_step(f"agent_{agent_id}", {
+                        "trace": result["reasoning_trace"]
+                    })
 
-        Examples based on pattern:
+            # === SYNTHESIS PHASE ===
+            self.current_metrics.start_phase("synthesis")
 
-        If pattern is "comparison" (like "compare flexibility with 20kWh battery"):
-        - Step 1: Query current config (der_manager, query)
-        - Step 2: Run baseline simulation (simulation, run)
-        - Step 3: Update config with changes (der_manager, update)
-        - Step 4: Run updated simulation (simulation, run)
-        - Step 5: Compare results (analyzer, compare)
+            if reasoning_callback:
+                await reasoning_callback({
+                    "phase": "synthesis_start",
+                    "source": "orchestrator",
+                    "title": "Synthesizing final response...",
+                    "content": {"steps_completed": len(agent_results)}
+                })
 
-        If pattern is "sequential" (like "update battery then run simulation"):
-        - Step 1: Update configuration (der_manager, update)
-        - Step 2: Run simulation (simulation, run)
+            final_response = await self._synthesize_response(
+                user_request, agent_results, reasoning_callback
+            )
+            self.current_metrics.end_phase("synthesis")
 
-        If pattern is "multi-step" (like "add PV and battery then optimize"):
-        - Step 1: Add PV system (der_manager, add)
-        - Step 2: Add battery system (der_manager, add)
-        - Step 3: Optimize configuration (optimizer, optimize)
+            # FIX: Calculate quality metrics (MISSING in revised version)
+            success = final_response.get("status") == "success"
+            accuracy = self._calculate_accuracy_score(final_response, agent_results)
+            completeness = self._calculate_completeness_score(execution_plan, agent_results)
+            self.current_metrics.set_quality_metrics(success, accuracy, completeness)
 
-        Now generate the specific plan for this request.
-        Respond only with valid JSON.
-        """
+            # FIX: Finalize metrics (MISSING in revised version)
+            final_metrics = self.current_metrics.finalize()
 
-        try:
-            plan_response = await self.llm_client.generate(plan_prompt, temperature=0.1)
-            if plan_response.startswith("```json"):
-                plan_response = plan_response[7:]
-            if plan_response.endswith("```"):
-                plan_response = plan_response[:-3]
-            plan = json.loads(plan_response.strip())
-
-            steps = plan.get("steps", [])
-
-            # Validate and enhance the plan
-            enhanced_steps = []
-            for step in steps:
-                # Ensure all required fields exist
-                enhanced_step = {
-                    "step_id": step.get("step_id", f"step_{len(enhanced_steps) + 1}"),
-                    "agent": step.get("agent", "der_manager"),
-                    "action": step.get("action", "Execute task"),
-                    "action_type": step.get("action_type", "query"),
-                    "depends_on": step.get("depends_on", []),
-                    "save_as": step.get("save_as", f"result_{len(enhanced_steps) + 1}"),
-                    "parameters": step.get("parameters", {})
-                }
-
-                # Auto-enhance parameters based on action_type and agent
-                if enhanced_step["agent"] == "der_manager":
-                    if enhanced_step["action_type"] == "query" and "query_type" not in enhanced_step["parameters"]:
-                        enhanced_step["parameters"]["query_type"] = "system"
-                    elif enhanced_step["action_type"] == "update":
-                        # Extract update details from the action description if not in parameters
-                        if "updates" not in enhanced_step["parameters"]:
-                            enhanced_step["parameters"] = self._extract_update_parameters(
-                                enhanced_step["action"],
-                                task.user_request
-                            )
-
-                elif enhanced_step["agent"] == "simulation":
-                    if enhanced_step["action_type"] == "run":
-                        # Determine which config to use based on dependencies
-                        if not enhanced_step["parameters"].get("use_config"):
-                            # If depends on an update step, use updated config
-                            for dep in enhanced_step["depends_on"]:
-                                if "step_3" in dep or "update" in dep:
-                                    enhanced_step["parameters"]["use_config"] = "updated_config"
-                                    break
-                            else:
-                                # Otherwise use current/baseline config
-                                enhanced_step["parameters"]["use_config"] = "current_config"
-
-                elif enhanced_step["agent"] == "analyzer":
-                    if enhanced_step["action_type"] == "compare":
-                        # Set baseline and updated keys based on dependencies
-                        if not enhanced_step["parameters"].get("baseline"):
-                            enhanced_step["parameters"]["baseline"] = "baseline_results"
-                        if not enhanced_step["parameters"].get("updated"):
-                            enhanced_step["parameters"]["updated"] = "updated_results"
-
-                enhanced_steps.append(enhanced_step)
-
-            return enhanced_steps
-
-        except Exception as e:
-            print(f"Warning: Failed to create execution plan: {e}")
-            import traceback
-            traceback.print_exc()
-
-            # Emergency fallback - create a simple plan based on keywords
-            return self._create_emergency_fallback_plan(task)
-
-    async def _extract_update_parameters(self, action_description: str, user_request: str) -> Dict[str, Any]:
-        """
-        Use LLM to extract update parameters from action description
-        """
-        extraction_prompt = f"""
-        Extract the DER system update parameters from this description:
-        Action: {action_description}
-        Original request: {user_request}
-
-        Identify what needs to be updated and the specific values.
-        Common components and their parameters:
-        - Battery (bat): rated_capacity_kWh, initial_soc, max_charge_kW, max_discharge_kW
-        - PV/Solar (pv): rated_capacity_kW
-        - EV (ev): rated_capacity_kWh, initial_soc
-        - HVAC: cooling_capacity_kW, heating_capacity_kW
-
-        Return as JSON:
-        {{
-            "system_id": "der_001",  
-            "updates": {{
-                "components": {{
-                    // Only include components that need updating
-                    "bat": {{"rated_capacity_kWh": 20}},  // example for battery
-                    "pv": {{"rated_capacity_kW": 5}}  // example for PV
-                }}
-            }}
-        }}
-
-        Important:
-        - Extract numeric values from any format (20kWh, twenty kilowatt hours, 20,000 Wh, etc.)
-        - Only include components explicitly mentioned for update
-        - Use standard units (kW for power, kWh for energy)
-
-        Respond only with valid JSON.
-        """
-
-        try:
-            response = await self.llm_client.generate(extraction_prompt, temperature=0.1)
-            if response.startswith("```json"):
-                response = response[7:]
-            if response.endswith("```"):
-                response = response[:-3]
-            parameters = json.loads(response.strip())
-
-            # Validate the structure
-            if "updates" not in parameters:
-                parameters["updates"] = {"components": {}}
-            if "components" not in parameters["updates"]:
-                parameters["updates"]["components"] = {}
-            if "system_id" not in parameters:
-                parameters["system_id"] = "der_001"
-
-            return parameters
-
-        except Exception as e:
-            print(f"Warning: Failed to extract parameters via LLM: {e}")
-            # Fallback to simple extraction
-            return {
-                "system_id": "der_001",
-                "updates": {"components": {}}
+            # FIX: Attach benchmark data to response (MISSING in revised version)
+            final_response["benchmark"] = {
+                "metrics": final_metrics.to_dict(),
+                "agent_modifications": agent_modifications,
+                "agent_results": agent_results,
+                "execution_plan": execution_plan,
+                "models": {
+                    "orchestrator": self.orchestrator_model,
+                    "agents": self.agent_model
+                },
+                "two_stage_planning": self.use_two_stage_planning,
             }
 
-    def _create_emergency_fallback_plan(self, task: Task) -> List[Dict[str, Any]]:
-        """
-        Create a very simple fallback plan when LLM fails
-        """
-        # Detect if this looks like a comparison
-        is_comparison = any(word in task.user_request.lower()
-                            for word in ["compare", "difference", "versus", "vs", "better"])
+            # FIX: Log response (MISSING in revised version)
+            await self._log_response(user_request, execution_plan, agent_results,
+                                     final_response, final_metrics.to_dict())
 
-        if is_comparison:
-            # Basic comparison plan
-            return [
-                {
-                    "step_id": "step_1",
-                    "agent": "der_manager",
-                    "action": "Query current configuration",
-                    "action_type": "query",
-                    "depends_on": [],
-                    "save_as": "current_config",
-                    "parameters": {"query_type": "system"}
-                },
-                {
-                    "step_id": "step_2",
-                    "agent": "simulation",
-                    "action": "Run baseline simulation",
-                    "action_type": "run",
-                    "depends_on": ["step_1"],
-                    "save_as": "baseline_results",
-                    "parameters": {"use_config": "current_config"}
-                },
-                {
-                    "step_id": "step_3",
-                    "agent": "der_manager",
-                    "action": "Update configuration",
-                    "action_type": "update",
-                    "depends_on": ["step_1"],
-                    "save_as": "updated_config",
-                    "parameters": self._extract_update_parameters("", task.user_request)
-                },
-                {
-                    "step_id": "step_4",
-                    "agent": "simulation",
-                    "action": "Run updated simulation",
-                    "action_type": "run",
-                    "depends_on": ["step_3"],
-                    "save_as": "updated_results",
-                    "parameters": {"use_config": "updated_config"}
-                },
-                {
-                    "step_id": "step_5",
-                    "agent": "analyzer",
-                    "action": "Compare results",
-                    "action_type": "compare",
-                    "depends_on": ["step_2", "step_4"],
-                    "save_as": "comparison_results",
-                    "parameters": {"baseline": "baseline_results", "updated": "updated_results"}
-                }
-            ]
-        else:
-            # Basic single step plan
-            return [
-                {
-                    "step_id": "step_1",
-                    "agent": "der_manager",
-                    "action": task.user_request,
-                    "action_type": "query",
-                    "depends_on": [],
-                    "save_as": "result",
-                    "parameters": {"query_type": "system"}
-                }
-            ]
+            return final_response
 
-    async def _execute_multi_step_plan(self, task: Task) -> List[Dict[str, Any]]:
-        """
-        NEW: Execute multi-step plan with dependency management
-        """
-        results = []
-        completed_steps = set()
-        step_results = {}  # step_id -> result
 
-        while len(completed_steps) < len(task.execution_plan):
-            # Find steps ready to execute
-            ready_steps = []
-            for step in task.execution_plan:
-                step_id = step["step_id"]
-                if step_id not in completed_steps:
-                    # Check dependencies
-                    deps = step.get("depends_on", [])
-                    if all(d in completed_steps for d in deps):
-                        ready_steps.append(step)
-
-            if not ready_steps:
-                print("Warning: No steps ready to execute, possible dependency issue")
-                break
-
-            # Execute ready steps (could be parallel in future)
-            for step in ready_steps:
-                step_id = step["step_id"]
-                agent = step["agent"]
-                action = step["action"]
-                actiontype = step["action_type"]
-
-                # Build request with context from previous steps
-                request_context = {
-                    "action": action,
-                    "action_type": actiontype,
-                    "step_id": step_id,
-                    "full_request": task.user_request,
-                    "shared_context": task.context
-                }
-
-                # Add dependent results to context
-                for dep_id in step.get("depends_on", []):
-                    if dep_id in step_results:
-                        request_context[f"result_from_{dep_id}"] = step_results[dep_id]
-
-                # Send to appropriate agent
-                agent_id = await self._get_agent_for_type(agent)
-                if not agent_id:
-                    print(f"No agent available for type: {agent}")
-                    step_results[step_id] = {"error": f"No agent for {agent}"}
-                    completed_steps.add(step_id)
-                    continue
-
+        except Exception as e:
+            self.logger.error(f"Error processing request: {e}")
+            error_response = {
+                "status": "error",
+                "error": str(e),
+                "request": user_request,
+                "failure_type": FailureType.RUNTIME_FAILURE.value,
+            }
+            # Preserve partial metrics
+            if self.current_metrics:
                 try:
-                    agent_request = Message(
-                        type=MessageType.AGENT_REQUEST,
-                        sender="orchestrator",
-                        recipient=agent_id,
-                        payload={
-                            "task_id": task.id,
-                            "request": actiontype,
-                            "context": request_context
-                        }
-                    )
+                    partial_metrics = self.current_metrics.finalize()
+                    error_response["benchmark"] = {
+                        "metrics": partial_metrics.to_dict(),
+                        "agent_modifications": agent_modifications if 'agent_modifications' in dir() else [],
+                        "agent_results": agent_results if 'agent_results' in dir() else {},
+                        "execution_plan": execution_plan if 'execution_plan' in dir() else [],
+                        "models": {
+                            "orchestrator": self.orchestrator_model,
+                            "agents": self.agent_model
+                        },
+                        "two_stage_planning": self.use_two_stage_planning,
+                    }
+                except Exception:
+                    pass
+            return error_response
 
-                    response = await asyncio.wait_for(
-                        self.message_bus.request_response(agent_request, timeout=30.0),
-                        timeout=35.0
-                    )
 
-                    if response:
-                        result = response.payload
-                        step_results[step_id] = result
+    async def _check_and_prepare_agents(
+            self,
+            user_request: str,
+            context: Optional[Dict[str, Any]],
+            reasoning_callback: Optional[ReasoningCallback] = None
+    ) -> List[Dict]:
+        """Dynamic mode: Check if current agents can handle the task."""
+        modifications = []
 
-                        # Save to shared context if specified
-                        save_as = step.get("save_as")
-                        if save_as:
-                            task.context[save_as] = result
-
-                        results.append({
-                            "step_id": step_id,
-                            "agent": agent,
-                            "result": result
-                        })
-                    else:
-                        step_results[step_id] = {"error": "Agent timeout"}
-
-                except Exception as e:
-                    step_results[step_id] = {"error": str(e)}
-
-                completed_steps.add(step_id)
-
-        return results
-
-    async def _get_agent_for_type(self, agent_type: str) -> Optional[str]:
-        """
-        NEW: Map agent types to actual agent IDs
-        """
-        # Map agent types to registered agent IDs
-        agent_map = {
-            "der_manager": "der_manager_001",
-            "simulation": "simulation_agent_001",
-            "analyzer": "analyzer_agent_001",
-            "optimizer": "optimizer_agent_001",
-            "hvac_manager": "hvac_manager_001"
+        agent_capabilities = {
+            aid: agent.get_capability_summary() for aid, agent in self.agents.items()
         }
 
-        agent_id = agent_map.get(agent_type)
+        all_server_tools = list(self.mcp_client.available_tools.keys())
+        tools_in_use = set()
+        for agent in self.agents.values():
+            tools_in_use.update(agent.available_tools.keys())
+        unused_tools = set(all_server_tools) - tools_in_use
 
-        # Verify agent exists in registry
-        if agent_id:
-            agent = await self.agent_registry.get_agent(agent_id)
-            if agent:
-                return agent_id
-
-        return None
-
-    async def _analyze_intent(self, user_request: str) -> str:
-        """Analyze user intent from the request - Updated for DER operations"""
         prompt = f"""
-        Analyze the following user request and determine the primary intent.
+Analyze if current agents can handle this task, or if modifications are needed.
 
-        User request: {user_request}
+User Request: {user_request}
+Context: {json.dumps(context) if context else "None"}
 
-        Available intents for DER system:
-        - system_query: User wants to know about current DER systems and their parameters
-        - controller_query: User wants to know about DER controllers and their parameters
-        - system_add: User wants to add a new DER system
-        - system_update: User wants to update/modify an existing DER system
-        - controller_add: User wants to add a new DER controller
-        - controller_update: User wants to update/modify an existing DER controller
-        - greeting: User is greeting or engaging in casual conversation
-        - complex: Multiple intents or complex reasoning needed
+Current Agents:
+{json.dumps(agent_capabilities, indent=2)}
 
-        Examples:
-        - "What DER systems do we have?" -> system_query
-        - "Show me the battery capacity" -> system_query
-        - "What controller are we using for the DER?" -> controller_query
-        - "Add a new PV system with 5kW capacity" -> system_add
-        - "Update the battery capacity to 20kWh" -> system_update
-        - "Change the controller setpoints" -> controller_update
-        - "Hello" -> greeting
+All Server Tools: {json.dumps(all_server_tools)}
+Tools Not Assigned to Any Agent: {json.dumps(list(unused_tools))}
 
-        Return only the intent category name.
-        """
+Return JSON:
+{{
+    "can_handle": true/false,
+    "analysis": "explanation",
+    "modifications": [
+        {{
+            "action": "create" or "revise",
+            "agent_id": "id",
+            "name": "name (for create)",
+            "role": "role (for create)",
+            "description": "description (for create)",
+            "tools": ["tool_names"],
+            "reason": "why needed"
+        }}
+    ]
+}}
+"""
 
-        try:
-            intent = await self.llm_client.generate(prompt, temperature=0.1)
-            return intent.strip().lower()
-        except Exception as e:
-            print(f"Warning: Failed to analyze intent: {e}")
-            return "unknown"
+        response: LLMResponse = await self.llm_client.chat(
+            messages=[{"role": "user", "content": prompt}],
+            model=self.orchestrator_model,
+            temperature=0.2,
+            json_mode=True
+        )
 
-    async def _decompose_task(self, task: Task) -> List[Dict[str, Any]]:
-        """Decompose complex tasks into subtasks"""
-        # For simple tasks, no decomposition needed
-        if task.intent in ["config_update", "status_query", "greeting"]:
-            return [{
-                "id": f"{task.id}_0",
-                "type": task.intent,
-                "request": task.user_request
-            }]
+        self.current_metrics.record_orchestrator_llm_call(response, "agent_check")
+        result, parsed_ok, parse_error = safe_json_parse(
+          response.content, fallback={"can_handle": True, "analysis": "", "modifications": []}
+        )
+        if not parsed_ok:
+            self.logger.error(f"Agent check JSON parse failed: {parse_error}")
 
-        # For complex tasks, use LLM to decompose
-        if task.intent == "complex":
-            prompt = f"""
-            Decompose this complex request into simpler subtasks:
+        # FIX: Keep original logging (was in original)
+        self.logger.info(f"Agent check: can_handle={result['can_handle']}")
 
-            Request: {task.user_request}
+        if reasoning_callback:
+            await reasoning_callback({
+                "phase": "agent_check",
+                "source": "orchestrator",
+                "title": "Agent capability check complete",
+                "content": {
+                    "can_handle": result.get("can_handle", True),
+                    "analysis": result.get("analysis", ""),
+                    "modifications_needed": len(result.get("modifications", [])),
+                    "modifications": [
+                        {
+                            "action": m.get("action"),
+                            "agent_id": m.get("agent_id"),
+                            "reason": m.get("reason")
+                        }
+                        for m in result.get("modifications", [])
+                    ],
+                    "tokens_used": response.total_tokens
+                }
+            })
 
-            Provide a JSON list of subtasks, each with:
-            - type: The subtask type
-            - description: What needs to be done
-            - dependencies: List of subtask IDs this depends on
-
-            Example format:
-            [{{"id": "0", "type": "query", "description": "...", "dependencies": []}}]
-            """
-
+        for mod in result.get("modifications", []):
             try:
-                response = await self.llm_client.generate(prompt, temperature=0.2)
-                subtasks = json.loads(response)
-                return subtasks
-            except Exception as e:
-                print(f"Warning: Failed to decompose task: {e}")
-                # Fallback to single task
-                return [{
-                    "id": f"{task.id}_0",
-                    "type": task.intent,
-                    "request": task.user_request
-                }]
+                if mod["action"] == "create":
+                    if reasoning_callback:
+                        await reasoning_callback({
+                            "phase": "agent_check",
+                            "source": "orchestrator",
+                            "title": f"Creating new agent: {mod['agent_id']}",
+                            "content": {
+                                "action": "create",
+                                "agent_id": mod["agent_id"],
+                                "name": mod.get("name", ""),
+                                "role": mod.get("role", ""),
+                                "tools": mod.get("tools", []),
+                                "reason": mod.get("reason", "")
+                            }
+                        })
 
-        return [{
-            "id": f"{task.id}_0",
-            "type": task.intent,
-            "request": task.user_request
+                    new_agent = await self.agent_factory.create_agent_from_spec({
+                        "agent_id": mod["agent_id"],
+                        "name": mod["name"],
+                        "role": mod["role"],
+                        "description": mod.get("description", mod["role"]),
+                        "available_tools": mod["tools"],
+                        "model": self.agent_model
+                    })
+                    self.agents[mod["agent_id"]] = new_agent
+                    modifications.append({
+                        "action": "created",
+                        "agent_id": mod["agent_id"],
+                        "reason": mod["reason"]
+                    })
+
+                elif mod["action"] == "revise":
+                    if mod["agent_id"] in self.agents:
+                        if reasoning_callback:
+                            await reasoning_callback({
+                                "phase": "agent_check",
+                                "source": "orchestrator",
+                                "title": f"Revising agent: {mod['agent_id']}",
+                                "content": {
+                                    "action": "revise",
+                                    "agent_id": mod["agent_id"],
+                                    "new_tools": mod.get("tools", []),
+                                    "reason": mod.get("reason", "")
+                                }
+                            })
+
+                        await self.agent_factory.revise_agent(
+                            self.agents[mod["agent_id"]],
+                            mod["tools"]
+                        )
+                        modifications.append({
+                            "action": "revised",
+                            "agent_id": mod["agent_id"],
+                            "reason": mod["reason"]
+                        })
+
+            except Exception as e:
+                self.logger.error(f"Failed to apply modification {mod}: {e}")
+                if reasoning_callback:
+                    await reasoning_callback({
+                        "phase": "agent_check",
+                        "source": "orchestrator",
+                        "title": f"Failed to modify agent: {mod.get('agent_id', '?')}",
+                        "content": {"error": str(e), "modification": mod}
+                    })
+
+        return modifications
+
+    async def _create_execution_plan(
+            self,
+            user_request: str,
+            context: Optional[Dict[str, Any]],
+            reasoning_callback: Optional[ReasoningCallback] = None
+    ) -> List[Dict[str, Any]]:
+        """Create execution plan based on intelligence mode"""
+        if self.intelligence_mode == IntelligenceMode.SINGLE_AGENT_REACT:
+            return await self._create_react_single_agent_plan(
+                user_request, context, reasoning_callback
+            )
+        elif self.intelligence_mode == IntelligenceMode.CENTRALIZED:
+            if self.use_two_stage_planning:
+                return await self._create_centralized_plan_two_stage(
+                    user_request, context, reasoning_callback
+                )
+            else:
+                return await self._create_centralized_plan(
+                    user_request, context, reasoning_callback
+                )
+        else:
+            return await self._create_decentralized_plan(
+                user_request, context, reasoning_callback
+            )
+
+    async def _create_react_single_agent_plan(
+            self,
+            user_request: str,
+            context: Optional[Dict[str, Any]],
+            reasoning_callback: Optional[ReasoningCallback] = None
+    ) -> List[Dict[str, Any]]:
+        """
+        ReAct single-agent baseline: NO orchestrator LLM call.
+        Creates a trivial one-step plan that delegates everything to the universal agent.
+        The agent itself will plan and execute autonomously (decentralized-style).
+        """
+        plan = [{
+            "step_id": "step_1",
+            "agent_id": "universal_agent",
+            "task": user_request,
+            "depends_on": [],
+            "expected_outcome": "Complete the full user request using available tools"
         }]
 
-    async def _select_agents(self, task: Task) -> List[str]:
-        """Select appropriate agents for the task"""
-        selected_agents = []
+        self.current_metrics.add_reasoning_step("react_passthrough", {
+            "mode": "single_agent_react",
+            "note": "No orchestrator planning — full delegation to universal agent"
+        })
 
-        # Map intents to required capabilities
-        capability_map = {
-            "config_update": [AgentCapability.DER_MANAGEMENT, AgentCapability.CONFIGURATION],
-            "flexibility_analysis": [AgentCapability.DER_MANAGEMENT, AgentCapability.OPTIMIZATION],
-            "status_query": [AgentCapability.DER_MANAGEMENT, AgentCapability.MONITORING],
-            "optimization": [AgentCapability.OPTIMIZATION],
-            "forecast": [AgentCapability.FORECASTING],
-            "greeting": [AgentCapability.DER_MANAGEMENT]
+        if reasoning_callback:
+            await reasoning_callback({
+                "phase": "planning_stage1",
+                "source": "orchestrator",
+                "title": "ReAct baseline: delegating to universal agent",
+                "content": {
+                    "mode": "single_agent_react",
+                    "agent": "universal_agent",
+                    "tools_available": len(self.agents["universal_agent"].available_tools),
+                    "tokens_used": 0
+                }
+            })
+
+        return plan
+
+    async def _create_centralized_plan(
+            self,
+            user_request: str,
+            context: Optional[Dict[str, Any]],
+            reasoning_callback: Optional[ReasoningCallback] = None
+    ) -> List[Dict[str, Any]]:
+        """Centralized plan with detailed tool instructions (ONE-STAGE)"""
+
+        agent_info = {}
+        for agent_id, agent in self.agents.items():
+            tool_descriptions = {
+                name: {
+                    "description": info.get("description", ""),
+                    "parameters": [
+                        {
+                            "name": p["name"],
+                            "type": p["type"],
+                            "required": p["required"],
+                            "description": p["description"],
+                            "default": p.get("default")
+                        }
+                        for p in info.get("parameters", [])
+                    ]
+                }
+                for name, info in agent.available_tools.items()
+            }
+
+            agent_info[agent_id] = {
+                "name": agent.agent_card.name,
+                "role": agent.agent_card.role,
+                "description": agent.agent_card.description,
+                "available_tools": tool_descriptions
+            }
+
+        prompt = f"""
+Create detailed execution plan for CENTRALIZED mode.
+
+{self.WORKFLOW_PATTERNS}
+
+## User Request: 
+{user_request}
+
+## Context: 
+{json.dumps(context) if context else "None"}
+
+## Available Agents (with full tool schemas):
+{json.dumps(agent_info, indent=2)}
+
+Return JSON:
+{{
+    "understanding": "what the user wants",
+    "reasoning": "analysis referencing the workflow patterns",
+    "steps": [
+        {{
+            "step_id": "step_1",
+            "agent_id": "agent_id",
+            "task": "task description",
+            "depends_on": [],
+            "orchestrator_guidance": {{
+                "tool_instructions": [
+                    {{
+                        "tool": "tool_name", 
+                        "parameters": {{"param_name": "value"}},
+                        "expected_output": "..."
+                    }}
+                ],
+                "validation": "how to verify"
+            }}
+        }}
+    ]
+}}
+"""
+
+        response: LLMResponse = await self.llm_client.chat(
+            messages=[{"role": "user", "content": prompt}],
+            model=self.orchestrator_model,
+            temperature=0.2,
+            json_mode=True
+        )
+
+        self.current_metrics.record_orchestrator_llm_call(response, "planning")
+        # plan = json.loads(response.content)
+        self.current_metrics.add_reasoning_step("raw_planning_response", {
+            "phase": "centralized_one_stage",
+            "raw_content": response.content[:2000],
+            "model": self.orchestrator_model
+        })
+
+        plan, parsed_ok, parse_error = safe_json_parse(
+              response.content, fallback={"understanding": "", "reasoning": "", "steps": []}
+          )
+        if not parsed_ok:
+              self.logger.error(f"Planning JSON parse failed: {parse_error}")
+              self.current_metrics.add_reasoning_step("json_parse_failure", {
+                  "phase": "planning", "error": parse_error,
+                  "raw_content": response.content[:500]
+              })
+        # FIX: Add reasoning step (was in original)
+        self.current_metrics.add_reasoning_step("orchestrator_planning", {
+            "understanding": plan.get("understanding", ""),
+            "reasoning": plan.get("reasoning", ""),
+            "steps_planned": len(plan.get("steps", []))
+        })
+
+        if reasoning_callback:
+            await reasoning_callback({
+                "phase": "planning_stage1",
+                "source": "orchestrator",
+                "title": "Execution plan created (one-stage centralized)",
+                "content": {
+                    "understanding": plan.get("understanding", ""),
+                    "reasoning": plan.get("reasoning", ""),
+                    "steps": [
+                        {
+                            "step_id": s.get("step_id"),
+                            "agent": s.get("agent_id"),
+                            "task": s.get("task"),
+                            "tools": [
+                                t.get("tool")
+                                for t in s.get("orchestrator_guidance", {}).get("tool_instructions", [])
+                            ],
+                            "params": [
+                                {
+                                    "tool": t.get("tool"),
+                                    "parameters": t.get("parameters", {})
+                                }
+                                for t in s.get("orchestrator_guidance", {}).get("tool_instructions", [])
+                            ]
+                        }
+                        for s in plan.get("steps", [])
+                    ],
+                    "tokens_used": response.total_tokens,
+                    "mode": "one_stage_centralized"
+                }
+            })
+
+        self.logger.info(f"Created centralized plan with {len(plan['steps'])} steps")
+        return plan['steps']
+
+    async def _create_centralized_plan_two_stage(
+            self,
+            user_request: str,
+            context: Optional[Dict[str, Any]],
+            reasoning_callback: Optional[ReasoningCallback] = None
+    ) -> List[Dict[str, Any]]:
+        """Two-stage centralized planning with streaming"""
+
+        # Stage 1: Basic info for initial planning
+        basic_agent_info = {}
+        for agent_id, agent in self.agents.items():
+            basic_agent_info[agent_id] = {
+                "name": agent.agent_card.name,
+                "role": agent.agent_card.role,
+                "description": agent.agent_card.description,
+                "tools": list(agent.available_tools.keys())
+            }
+
+        stage1_prompt = f"""
+Create a high-level execution plan. Select which agents and tools to use.
+
+{self.WORKFLOW_PATTERNS}
+
+## User Request: 
+{user_request}
+
+## Context: 
+{json.dumps(context) if context else "None"}
+
+## Available Agents (with tool names only):
+{json.dumps(basic_agent_info, indent=2)}
+
+Return JSON:
+{{
+    "understanding": "what the user wants",
+    "reasoning": "why these agents/tools, in this order, referencing the workflow patterns",
+    "steps": [
+        {{
+            "step_id": "step_1",
+            "agent_id": "agent_id",
+            "task": "task description",
+            "depends_on": [],
+            "tools_to_use": ["tool_name1", "tool_name2"]
+        }}
+    ]
+}}
+"""
+
+        response1: LLMResponse = await self.llm_client.chat(
+            messages=[{"role": "user", "content": stage1_prompt}],
+            model=self.orchestrator_model,
+            temperature=0.2,
+            json_mode=True
+        )
+
+        self.current_metrics.record_orchestrator_llm_call(response1, "planning_stage1")
+
+        self.current_metrics.add_reasoning_step("raw_planning_response", {
+            "phase": "centralized_two_stage_1",
+            "raw_content": response1.content[:2000],
+            "model": self.orchestrator_model
+        })
+
+        # stage1_plan = json.loads(response1.content)
+        stage1_plan, parsed_ok, parse_error = safe_json_parse(
+           response1.content, fallback={"understanding": "", "reasoning": "", "steps": []}
+        )
+        if not parsed_ok:
+              self.logger.error(f"Stage 1 JSON parse failed: {parse_error}")
+              self.current_metrics.add_reasoning_step("json_parse_failure", {
+                  "phase": "planning_stage1", "error": parse_error,
+                  "raw_content": response1.content[:500]
+              })
+
+        # FIX: Add reasoning step for stage 1 (was in original)
+        self.current_metrics.add_reasoning_step("orchestrator_planning_stage1", {
+            "understanding": stage1_plan.get("understanding", ""),
+            "reasoning": stage1_plan.get("reasoning", ""),
+            "steps_planned": len(stage1_plan.get("steps", []))
+        })
+
+        if reasoning_callback:
+            await reasoning_callback({
+                "phase": "planning_stage1",
+                "source": "orchestrator",
+                "title": "Stage 1: High-level plan created",
+                "content": {
+                    "understanding": stage1_plan.get("understanding", ""),
+                    "reasoning": stage1_plan.get("reasoning", ""),
+                    "steps": [
+                        {
+                            "step_id": s.get("step_id"),
+                            "agent": s.get("agent_id"),
+                            "task": s.get("task"),
+                            "tools": s.get("tools_to_use", [])
+                        }
+                        for s in stage1_plan.get("steps", [])
+                    ],
+                    "tokens_used": response1.total_tokens
+                }
+            })
+
+        self.logger.info(f"Stage 1: Created plan with {len(stage1_plan['steps'])} steps")
+
+        # Stage 2: Get detailed parameters for selected tools only
+        selected_tools = set()
+        for step in stage1_plan.get("steps", []):
+            selected_tools.update(step.get("tools_to_use", []))
+
+        detailed_tool_info = {}
+        for agent_id, agent in self.agents.items():
+            for tool_name, tool_info in agent.available_tools.items():
+                if tool_name in selected_tools:
+                    detailed_tool_info[tool_name] = {
+                        "description": tool_info.get("description", ""),
+                        "parameters": [
+                            {
+                                "name": p["name"],
+                                "type": p["type"],
+                                "required": p["required"],
+                                "description": p["description"],
+                                "default": p.get("default")
+                            }
+                            for p in tool_info.get("parameters", [])
+                        ]
+                    }
+
+        stage2_prompt = f"""
+Complete the execution plan with specific tool parameters.
+
+User Request: {user_request}
+Plan from Stage 1: {json.dumps(stage1_plan['steps'], indent=2)}
+
+Tool Parameter Details (for selected tools only):
+{json.dumps(detailed_tool_info, indent=2)}
+
+For each step, fill in the orchestrator_guidance with exact parameters.
+Return JSON:
+{{
+    "steps": [
+        {{
+            "step_id": "step_1",
+            "agent_id": "agent_id",
+            "task": "task description",
+            "depends_on": [],
+            "orchestrator_guidance": {{
+                "tool_instructions": [
+                    {{
+                        "tool": "tool_name",
+                        "parameters": {{"param_name": "value"}},
+                        "expected_output": "..."
+                    }}
+                ],
+                "validation": "how to verify"
+            }}
+        }}
+    ]
+}}
+"""
+
+        response2: LLMResponse = await self.llm_client.chat(
+            messages=[{"role": "user", "content": stage2_prompt}],
+            model=self.orchestrator_model,
+            temperature=0.2,
+            json_mode=True
+        )
+
+        self.current_metrics.record_orchestrator_llm_call(response2, "planning_stage2")
+
+        self.current_metrics.add_reasoning_step("raw_planning_response", {
+            "phase": "centralized_two_stage_2",
+            "raw_content": response2.content[:2000],
+            "model": self.orchestrator_model
+        })
+
+        # stage2_plan = json.loads(response2.content)
+        stage2_plan, parsed_ok, parse_error = safe_json_parse(
+              response2.content, fallback={"steps": []}
+          )
+        if not parsed_ok:
+              self.logger.error(f"Stage 2 JSON parse failed: {parse_error}")
+              self.current_metrics.add_reasoning_step("json_parse_failure", {
+                  "phase": "planning_stage2", "error": parse_error,
+                  "raw_content": response2.content[:500]
+              })
+
+        # FIX: Add reasoning step for stage 2 (was in original)
+        self.current_metrics.add_reasoning_step("orchestrator_planning_stage2", {
+            "tools_detailed": list(selected_tools),
+            "steps_completed": len(stage2_plan.get("steps", []))
+        })
+
+        if reasoning_callback:
+            await reasoning_callback({
+                "phase": "planning_stage2",
+                "source": "orchestrator",
+                "title": "Stage 2: Detailed parameters filled",
+                "content": {
+                    "tools_detailed": list(selected_tools),
+                    "steps_with_params": [
+                        {
+                            "step_id": s.get("step_id"),
+                            "agent": s.get("agent_id"),
+                            "task": s.get("task", "")[:60],
+                            "tools": [
+                                {
+                                    "tool": t.get("tool"),
+                                    "params": t.get("parameters", {})
+                                }
+                                for t in s.get("orchestrator_guidance", {}).get("tool_instructions", [])
+                            ]
+                        }
+                        for s in stage2_plan.get("steps", [])
+                    ],
+                    "tokens_used": response2.total_tokens
+                }
+            })
+
+        self.logger.info(f"Stage 2: Completed plan with detailed parameters")
+        return stage2_plan['steps']
+
+    async def _create_decentralized_plan(
+            self,
+            user_request: str,
+            context: Optional[Dict[str, Any]],
+            reasoning_callback: Optional[ReasoningCallback] = None
+    ) -> List[Dict[str, Any]]:
+        """Decentralized plan - high level only, agents decide tools"""
+
+        agent_info = {
+            aid: {
+                "name": a.agent_card.name,
+                "role": a.agent_card.role,
+                "description": a.agent_card.description,
+                "tool_count": len(a.available_tools)
+            }
+            for aid, a in self.agents.items()
         }
 
-        required_capabilities = capability_map.get(task.intent, [AgentCapability.DER_MANAGEMENT])
+        prompt = f"""
+Create high-level plan for DECENTRALIZED mode. Agents will decide their own tool usage.
 
-        # Get available agents from registry
-        available_agents = await self.agent_registry.get_agents_by_capability(required_capabilities)
+{self.WORKFLOW_PATTERNS}
 
-        # For now, select the first available agent
-        # In production, this would consider load balancing, performance metrics, etc.
-        if available_agents:
-            selected_agents = [available_agents[0]["agent_id"]]
-        else:
-            # Fallback to DER Manager if available
-            der_manager = await self.agent_registry.get_agent("der_manager_001")
-            if der_manager:
-                selected_agents = ["der_manager_001"]
+## User Request: 
+{user_request}
 
-        return selected_agents
+## Context: 
+{json.dumps(context) if context else "None"}
 
-    async def _execute_with_agents(self, task: Task) -> List[Dict[str, Any]]:
-        """Execute task with selected agents"""
-        results = []
+## Available Agents:
+{json.dumps(agent_info, indent=2)}
 
-        for subtask in task.subtasks:
-            for agent_id in task.selected_agents:
-                try:
-                    # Send request to agent
-                    agent_request = Message(
-                        type=MessageType.AGENT_REQUEST,
-                        sender="orchestrator",
-                        recipient=agent_id,
-                        payload={
-                            "task_id": task.id,
-                            "subtask_id": subtask.get("id"),
-                            "request": subtask.get("request", task.user_request),
-                            "context": {
-                                "intent": task.intent,
-                                "full_request": task.user_request
-                            }
+Return JSON:
+{{
+    "understanding": "what the user wants",
+    "reasoning": "why these agents in this order, referencing the patterns",
+    "steps": [
+        {{
+            "step_id": "step_1",
+            "agent_id": "agent_id",
+            "task": "high-level task",
+            "depends_on": [],
+            "expected_outcome": "what should be achieved"
+        }}
+    ]
+}}
+"""
+
+        response: LLMResponse = await self.llm_client.chat(
+            messages=[{"role": "user", "content": prompt}],
+            model=self.orchestrator_model,
+            temperature=0.2,
+            json_mode=True
+        )
+
+        self.current_metrics.record_orchestrator_llm_call(response, "planning")
+
+        self.current_metrics.add_reasoning_step("raw_planning_response", {
+            "phase": "decentralized",
+            "raw_content": response.content[:2000],
+            "model": self.orchestrator_model
+        })
+
+        # plan = json.loads(response.content)
+        plan, parsed_ok, parse_error = safe_json_parse(
+                      response.content, fallback={"understanding": "", "reasoning": "", "steps": []}
+                  )
+        if not parsed_ok:
+              self.logger.error(f"Decentralized planning JSON parse failed: {parse_error}")
+        # FIX: Add reasoning step (was in original)
+        self.current_metrics.add_reasoning_step("orchestrator_planning", {
+            "understanding": plan.get("understanding", ""),
+            "reasoning": plan.get("reasoning", ""),
+            "steps_planned": len(plan.get("steps", []))
+        })
+
+        if reasoning_callback:
+            await reasoning_callback({
+                "phase": "planning_stage1",
+                "source": "orchestrator",
+                "title": "High-level plan created (decentralized)",
+                "content": {
+                    "understanding": plan.get("understanding", ""),
+                    "reasoning": plan.get("reasoning", ""),
+                    "steps": [
+                        {
+                            "step_id": s.get("step_id"),
+                            "agent": s.get("agent_id"),
+                            "task": s.get("task"),
+                            "expected_outcome": s.get("expected_outcome", ""),
+                            "note": "Agent will autonomously select tools"
                         }
+                        for s in plan.get("steps", [])
+                    ],
+                    "tokens_used": response.total_tokens,
+                    "mode": "decentralized"
+                }
+            })
+
+        self.logger.info(f"Created decentralized plan with {len(plan['steps'])} steps")
+        return plan['steps']
+
+    async def _execute_plan(
+            self,
+            execution_plan: List[Dict[str, Any]],
+            context: Optional[Dict[str, Any]],
+            reasoning_callback: Optional[ReasoningCallback] = None
+    ) -> Dict[str, Any]:
+        """Execute plan with retry, timeout, and cascade failure handling"""
+        results = {}
+        completed = set()
+        step_failure_types = {}  # Track failure type per step
+
+        for step in execution_plan:
+            step_id = step['step_id']
+            agent_id = step['agent_id']
+            depends_on = step.get('depends_on', [])
+
+            # --- Check dependency cascade ---
+            failed_deps = [
+                d for d in depends_on
+                if d in completed and results.get(d, {}).get("status") == "error"
+            ]
+            if failed_deps:
+                results[step_id] = {
+                    "status": "error",
+                    "error": f"Skipped: dependencies failed: {failed_deps}",
+                    "agent": agent_id,
+                    "failure_type": FailureType.CASCADE_FAILURE.value,
+                    "tools_used": []
+                }
+                step_failure_types[step_id] = FailureType.CASCADE_FAILURE
+                completed.add(step_id)
+                self.logger.warning(f"Step {step_id} skipped due to cascade failure")
+
+                if reasoning_callback:
+                    await reasoning_callback({
+                        "phase": "agent_skipped",
+                        "source": f"agent:{agent_id}",
+                        "title": f"Skipped {agent_id} (dependency failed)",
+                        "content": {"step_id": step_id, "failed_deps": failed_deps}
+                    })
+                continue
+
+            # --- Wait for non-failed dependencies ---
+            pending_deps = [d for d in depends_on if d not in completed]
+            wait_time = 0
+            while pending_deps and wait_time < 30:
+                await asyncio.sleep(0.1)
+                wait_time += 0.1
+                pending_deps = [d for d in depends_on if d not in completed]
+
+            # --- Resolve agent ---
+            agent = self.agents.get(agent_id)
+            if not agent:
+                self.logger.error(f"Agent {agent_id} not found")
+                results[step_id] = {
+                    "status": "error",
+                    "error": f"Agent {agent_id} not found",
+                    "failure_type": FailureType.PLANNING_FAILURE.value,
+                    "tools_used": []
+                }
+                step_failure_types[step_id] = FailureType.PLANNING_FAILURE
+                completed.add(step_id)
+                continue
+
+            if reasoning_callback:
+                await reasoning_callback({
+                    "phase": "agent_start",
+                    "source": f"agent:{agent_id}",
+                    "title": f"Starting {agent.agent_card.name}",
+                    "content": {
+                        "step_id": step_id,
+                        "task": step['task'],
+                        "tools_planned": [
+                            t.get("tool")
+                            for t in step.get('orchestrator_guidance', {}).get('tool_instructions', [])
+                        ]
+                    }
+                })
+
+            # --- Build agent request ---
+            agent_request = {
+                "task": step['task'],
+                "context": context,
+                "previous_results": {sid: results[sid] for sid in depends_on if sid in results}
+            }
+            if self.intelligence_mode == IntelligenceMode.CENTRALIZED:
+                agent_request["orchestrator_guidance"] = step.get('orchestrator_guidance', {})
+
+            # --- Execute with retry + timeout ---
+            # Resolve timeout for this agent's model
+            agent_model = getattr(agent.agent_card, 'model', self.agent_model)
+            step_timeout = self.TIMEOUT_BY_MODEL.get(
+                agent_model, self.STEP_TIMEOUT_DEFAULT
+            ) if hasattr(self, 'TIMEOUT_BY_MODEL') else self.STEP_TIMEOUT_DEFAULT
+
+            result = None
+            last_error = None
+
+            for attempt in range(self.MAX_STEP_RETRIES + 1):
+                try:
+                    result = await asyncio.wait_for(
+                        agent.process_request(agent_request, reasoning_callback),
+                        timeout=step_timeout
                     )
 
-                    # Wait for response with timeout
-                    response = await asyncio.wait_for(
-                        self.message_bus.request_response(agent_request, timeout=30.0),
-                        timeout=35.0
-                    )
+                    # ── FIX: Check the agent's returned status ──────────────
+                    # Previously this was just `break` — agent errors were invisible
+                    # to the retry mechanism because agent.process_request() catches
+                    # all exceptions and returns {"status": "error", ...}.
+                    agent_status = (result.get("status", "unknown")
+                                    if isinstance(result, dict) else "unknown")
 
-                    if response:
-                        results.append({
-                            "agent_id": agent_id,
-                            "subtask_id": subtask.get("id"),
-                            "result": response.payload
-                        })
+                    if agent_status in ("success", "partial"):
+                        break  # Good result, stop retrying
                     else:
-                        results.append({
-                            "agent_id": agent_id,
-                            "subtask_id": subtask.get("id"),
-                            "error": "Agent timeout"
-                        })
+                        # Soft failure: agent returned error without raising
+                        last_error = result.get("error",
+                                                f"Agent returned status: {agent_status}")
+                        self.logger.warning(
+                            f"Step {step_id} soft failure "
+                            f"(attempt {attempt + 1}/{self.MAX_STEP_RETRIES + 1}): "
+                            f"{last_error}"
+                        )
+                        if attempt < self.MAX_STEP_RETRIES:
+                            if reasoning_callback:
+                                await reasoning_callback({
+                                    "phase": "agent_retry",
+                                    "source": f"agent:{agent_id}",
+                                    "title": f"Retrying {agent.agent_card.name} "
+                                             f"(soft failure)",
+                                    "content": {
+                                        "attempt": attempt + 2,
+                                        "max": self.MAX_STEP_RETRIES + 1,
+                                        "error": last_error[:150],
+                                        "failure_type": "soft"
+                                    }
+                                })
+                            result = None  # Clear so next attempt overwrites
+                        # else: final attempt, keep the error result
 
                 except asyncio.TimeoutError:
-                    results.append({
-                        "agent_id": agent_id,
-                        "subtask_id": subtask.get("id"),
-                        "error": "Agent request timeout"
-                    })
+                    last_error = (f"Timeout after {step_timeout}s "
+                                  f"(attempt {attempt + 1})")
+                    self.logger.warning(
+                        f"Step {step_id} timeout "
+                        f"(attempt {attempt + 1}/{self.MAX_STEP_RETRIES + 1})"
+                    )
+                    result = None
+
+                    if reasoning_callback and attempt < self.MAX_STEP_RETRIES:
+                        await reasoning_callback({
+                            "phase": "agent_retry",
+                            "source": f"agent:{agent_id}",
+                            "title": f"Retrying {agent.agent_card.name} (timeout)",
+                            "content": {
+                                "attempt": attempt + 2,
+                                "max": self.MAX_STEP_RETRIES + 1,
+                                "failure_type": "hard"
+                            }
+                        })
+
                 except Exception as e:
-                    results.append({
-                        "agent_id": agent_id,
-                        "subtask_id": subtask.get("id"),
-                        "error": f"Agent execution error: {str(e)}"
-                    })
+                    last_error = str(e)
+                    self.logger.warning(
+                        f"Step {step_id} exception (attempt {attempt + 1}): {e}"
+                    )
+                    result = None
+
+                    if reasoning_callback and attempt < self.MAX_STEP_RETRIES:
+                        await reasoning_callback({
+                            "phase": "agent_retry",
+                            "source": f"agent:{agent_id}",
+                            "title": f"Retrying {agent.agent_card.name} (exception)",
+                            "content": {
+                                "attempt": attempt + 2,
+                                "error": str(e)[:150],
+                                "failure_type": "hard"
+                            }
+                        })
+
+            # --- Handle final result ---
+            if result is None:
+                result = {
+                    "status": "error",
+                    "error": last_error or "Unknown failure after retries",
+                    "agent": agent_id,
+                    "failure_type": FailureType.RUNTIME_FAILURE.value,
+                    "tools_used": []
+                }
+                step_failure_types[step_id] = FailureType.RUNTIME_FAILURE
+
+            # Retry metadata — now actually populated
+            final_ok = (isinstance(result, dict)
+                        and result.get("status") in ("success", "partial"))
+            result["retry_info"] = {
+                "retries_used": attempt,
+                "max_retries": self.MAX_STEP_RETRIES,
+                "was_retried": attempt > 0,
+                "final_success": final_ok,
+            }
+            results[step_id] = result
+            completed.add(step_id)
+
+
+            if reasoning_callback:
+                await reasoning_callback({
+                    "phase": "agent_complete",
+                    "source": f"agent:{agent_id}",
+                    "title": f"Completed {agent.agent_card.name}",
+                    "content": {
+                        "step_id": step_id,
+                        "status": result.get("status", "unknown"),
+                        "summary": result.get("summary", "")[:150],
+                        "tools_used": [t.get("tool") for t in result.get("tools_used", [])],
+                        "tokens_used": result.get("metrics", {}).get("tokens_used", 0),
+                        "retries_needed": attempt if result.get("status") != "error" else self.MAX_STEP_RETRIES
+                    }
+                })
+
+            self.logger.info(f"Completed step {step_id}")
 
         return results
 
-    async def _aggregate_results(self, task: Task) -> Dict[str, Any]:
-        """
-        UPDATED: Handle both simple and complex task results
-        """
-        if len(task.results) == 1:
-            single_result = task.results[0]
-            if "error" in single_result:
-                return {
-                    "error": single_result["error"],
-                    "agent": single_result.get("agent_id", "unknown")
+    async def _synthesize_response(
+            self,
+            user_request: str,
+            agent_results: Dict[str, Any],
+            reasoning_callback: Optional[ReasoningCallback] = None
+    ) -> Dict[str, Any]:
+        """Synthesize final response"""
+        prompt = f"""
+Synthesize final response from agent results.
+
+User Request: {user_request}
+Agent Results: {json.dumps(agent_results, indent=2)}
+
+Interpret the numerical data and provide meaningful insights.
+
+Return JSON:
+{{
+    "status": "success" or "partial" or "failed",
+    "summary": "2-3 sentence executive summary with KEY FINDINGS and actual numbers",
+    "reasoning": "how results address request",
+    "details": {{}},
+    "recommendations": ["actionable recommendations based on data"],
+    "next_steps": []
+}}
+"""
+
+        response: LLMResponse = await self.llm_client.chat(
+            messages=[{"role": "user", "content": prompt}],
+            model=self.orchestrator_model,
+            temperature=0.3,
+            json_mode=True
+        )
+
+        self.current_metrics.record_orchestrator_llm_call(response, "synthesis")
+
+        result, parsed_ok, parse_error = safe_json_parse(
+          response.content,
+          fallback={"status": "failed", "summary": "JSON parse failed", "reasoning": "", "details": {}, "recommendations": [], "next_steps": []}
+        )
+        if not parsed_ok:
+            self.logger.error(f"Synthesis JSON parse failed: {parse_error}")
+            # FIX: Add reasoning step (was in original)
+            self.current_metrics.add_reasoning_step("orchestrator_synthesis", {
+                "status": result.get("status"),
+                "reasoning": result.get("reasoning", "")
+            })
+
+        if reasoning_callback:
+            await reasoning_callback({
+                "phase": "synthesis_complete",
+                "source": "orchestrator",
+                "title": "Final synthesis complete",
+                "content": {
+                    "status": result.get("status"),
+                    "summary": result.get("summary", "")[:200],
+                    "reasoning": result.get("reasoning", "")[:150],
+                    "recommendations_count": len(result.get("recommendations", [])),
+                    "tokens_used": response.total_tokens
                 }
-            elif "result" in single_result:
-                return single_result["result"]
-            else:
-                return {"error": "Invalid agent response format"}
+            })
 
-        # For multi-step results, create a summary
-        if task.execution_plan:
-            # Find the final step (usually comparison or analysis)
-            final_steps = [r for r in task.results if
-                           "compare" in r.get("step_id", "") or "analyze" in r.get("step_id", "")]
-            if final_steps:
-                return final_steps[-1].get("result", {})
+        return result
 
-        # Default aggregation
-        aggregated = {
-            "task_id": task.id,
-            "intent": task.intent,
-            "request": task.user_request,
-            "results": task.results
-        }
+    def _calculate_accuracy_score(self, response: Dict, agent_results: Dict) -> float:
+        """Calculate accuracy based on response quality"""
+        score = 0.0
+        status = response.get("status", "failed")
+        if status == "success":
+            score += 0.4
+        elif status == "partial":
+            score += 0.2
 
-        return aggregated
+        agent_scores = []
+        for result in agent_results.values():
+            if isinstance(result, dict):
+                if result.get("status") == "success":
+                    agent_scores.append(1.0)
+                elif result.get("status") == "partial":
+                    agent_scores.append(0.5)
+                else:
+                    agent_scores.append(0.0)
 
-    def get_task_status(self, task_id: str) -> Optional[Dict[str, Any]]:
-        """Get status of a task"""
-        task = self.active_tasks.get(task_id)
-        if task:
-            return {
-                "task_id": task.id,
-                "status": task.status,
-                "intent": task.intent,
-                "selected_agents": task.selected_agents,
-                "created_at": task.created_at.isoformat(),
-                "progress": len(task.results) / max(len(task.subtasks), 1)
-            }
+        if agent_scores:
+            score += 0.4 * (sum(agent_scores) / len(agent_scores))
 
-        # Check history
-        for hist_task in self.task_history:
-            if hist_task.id == task_id:
-                return {
-                    "task_id": hist_task.id,
-                    "status": hist_task.status,
-                    "intent": hist_task.intent,
-                    "selected_agents": hist_task.selected_agents,
-                    "created_at": hist_task.created_at.isoformat(),
-                    "completed_at": hist_task.completed_at.isoformat() if hist_task.completed_at else None,
-                    "results": hist_task.results
-                }
+        if response.get("summary") and len(response.get("summary", "")) > 20:
+            score += 0.2
 
-        return None
+        return min(score, 1.0)
+
+    def _calculate_completeness_score(self, plan: List[Dict], results: Dict) -> float:
+        """Calculate plan completion rate"""
+        if not plan:
+            return 0.0
+
+        completed = 0
+        for step in plan:
+            step_id = step.get("step_id")
+            if step_id in results:
+                result = results[step_id]
+                if isinstance(result, dict) and result.get("status") in ["success", "partial"]:
+                    completed += 1
+
+        return completed / len(plan)
+
+    async def _log_response(self, user_request: str, execution_plan: List[Dict[str, Any]],
+                            agent_results: Dict[str, Any], final_response: Dict[str, Any],
+                            metrics: Dict[str, Any]):
+        """Log response"""
+        timestamp = datetime.now().isoformat()
+        orchestrator_response = OrchestratorResponse(
+            timestamp=timestamp, request=user_request, execution_plan=execution_plan,
+            agent_results=agent_results, final_response=final_response, metrics=metrics,
+            mode=self.intelligence_mode.value,
+            models={"orchestrator": self.orchestrator_model, "agents": self.agent_model}
+        )
+        log_file = self.orchestrator_log_dir / f"response_{timestamp.replace(':', '-')}.json"
+        with open(log_file, 'w') as f:
+            f.write(orchestrator_response.to_json())
+
+    def update_models(self, orchestrator_model: str = None, agent_model: str = None):
+        """Update models"""
+        if orchestrator_model:
+            self.orchestrator_model = orchestrator_model
+        if agent_model:
+            self.agent_model = agent_model
+            for agent in self.agents.values():
+                agent.update_model(agent_model)
+
+    def set_intelligence_mode(self, mode: IntelligenceMode):
+        """Change intelligence mode"""
+        self.intelligence_mode = mode
+        for agent in self.agents.values():
+            agent.intelligence_mode = mode
+
+    def set_agent_generation_mode(self, mode: AgentGenerationMode):
+        """Change agent generation mode"""
+        self.agent_generation_mode = mode
+        self.logger.info(f"Set agent generation mode to {mode.value}")
+
+    def set_two_stage_planning(self, enabled: bool):
+        """Enable or disable two-stage planning"""
+        self.use_two_stage_planning = enabled
+        self.logger.info(f"Set two_stage_planning to {enabled}")
